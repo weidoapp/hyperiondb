@@ -4,6 +4,7 @@ use std::time::Duration;
 
 mod config;
 mod raft_node;
+mod state;
 mod transport;
 
 pgrx::pg_module_magic!();
@@ -72,10 +73,12 @@ pub extern "C-unwind" fn pg_replica_supervisor_main(_arg: pg_sys::Datum) {
         );
         if snapshot != last {
             pgrx::log!("pg_replica: node {} -> {}", node_id, snapshot);
+            state::write(node_id, &snapshot);
             last = snapshot;
         }
     }
 
+    state::write(node_id, "stopped");
     pgrx::log!("pg_replica: supervisor shutting down");
 }
 
@@ -85,11 +88,15 @@ mod replica {
 
     #[pg_extern]
     fn status() -> String {
+        let node_id = crate::config::node_id();
+        let live = crate::state::read(node_id as u64)
+            .unwrap_or_else(|| String::from("consensus not started"));
         format!(
-            "pg_replica M1: node_id={} raft_port={} peers=[{}] (consensus not started)",
-            crate::config::node_id(),
+            "pg_replica node_id={} raft_port={} peers=[{}] | {}",
+            node_id,
             crate::config::raft_port(),
-            crate::config::peers()
+            crate::config::peers(),
+            live
         )
     }
 }
@@ -104,7 +111,7 @@ mod tests {
         let reported = Spi::get_one::<String>("SELECT replica.status()")
             .expect("SPI failed")
             .expect("status() returned NULL");
-        assert!(reported.contains("pg_replica M1"));
+        assert!(reported.contains("node_id="));
     }
 }
 
