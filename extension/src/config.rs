@@ -4,6 +4,9 @@ use std::ffi::CString;
 pub static NODE_ID: GucSetting<i32> = GucSetting::<i32>::new(0);
 pub static RAFT_PORT: GucSetting<i32> = GucSetting::<i32>::new(7400);
 pub static PEERS: GucSetting<Option<CString>> = GucSetting::<Option<CString>>::new(None);
+pub static PG_ADDRS: GucSetting<Option<CString>> = GucSetting::<Option<CString>>::new(None);
+pub static PSQL: GucSetting<Option<CString>> = GucSetting::<Option<CString>>::new(None);
+pub static REJOIN_SCRIPT: GucSetting<Option<CString>> = GucSetting::<Option<CString>>::new(None);
 
 pub fn init() {
     GucRegistry::define_int_guc(
@@ -36,6 +39,33 @@ pub fn init() {
         GucContext::Postmaster,
         GucFlags::default(),
     );
+
+    GucRegistry::define_string_guc(
+        c"pg_replica.pg_addrs",
+        c"Each node's Postgres host:port as id@host:port (used to build primary_conninfo).",
+        c"Example: 1@10.0.0.1:5432,2@10.0.0.2:5432,3@10.0.0.3:5432",
+        &PG_ADDRS,
+        GucContext::Postmaster,
+        GucFlags::default(),
+    );
+
+    GucRegistry::define_string_guc(
+        c"pg_replica.psql",
+        c"Path to the psql client used to apply promote/repoint actions.",
+        c"Defaults to 'psql' on PATH.",
+        &PSQL,
+        GucContext::Postmaster,
+        GucFlags::default(),
+    );
+
+    GucRegistry::define_string_guc(
+        c"pg_replica.rejoin_script",
+        c"Path to a detached helper that rewinds+rejoins a deposed primary as a standby.",
+        c"Receives: pgbin datadir leader_host leader_port node_id. Empty disables rejoin (fence only).",
+        &REJOIN_SCRIPT,
+        GucContext::Postmaster,
+        GucFlags::default(),
+    );
 }
 
 pub fn node_id() -> i32 {
@@ -48,6 +78,28 @@ pub fn raft_port() -> i32 {
 
 pub fn peers() -> String {
     PEERS
+        .get()
+        .map(|value| value.to_string_lossy().into_owned())
+        .unwrap_or_default()
+}
+
+pub fn pg_addrs() -> String {
+    PG_ADDRS
+        .get()
+        .map(|value| value.to_string_lossy().into_owned())
+        .unwrap_or_default()
+}
+
+pub fn psql() -> String {
+    PSQL
+        .get()
+        .map(|value| value.to_string_lossy().into_owned())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| String::from("psql"))
+}
+
+pub fn rejoin_script() -> String {
+    REJOIN_SCRIPT
         .get()
         .map(|value| value.to_string_lossy().into_owned())
         .unwrap_or_default()

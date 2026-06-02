@@ -115,15 +115,3 @@ brief write outage during failover. Synchronous (zero-loss) mode is opt-in.
 corrupted. Fencing + quorum + most-advanced-replica selection prioritize
 correctness. Operators who want zero data loss enable quorum-sync and accept the
 latency.
-
----
-
-## D0 — Should you even build this? (the honest meta-decision)
-
-Before investing: `pg_replica` is justified only when Postgres is a **system of
-record** that must survive node loss **without manual ops** *and* you won't run
-etcd/Consul/Kubernetes. If your Postgres is a **derived/rebuildable cache**, the
-right answer is *no HA system at all* — rebuild from source and use a shared
-static role per node. If you'd tolerate a dependency, **Patroni** (raft mode) or
-**pg_auto_failover** already exist and are mature. Build this when the niche —
-embedded-quorum, no-DCS, no-k8s, plugin-form — is specifically what you need.

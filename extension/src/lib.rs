@@ -1,7 +1,8 @@
-use pgrx::bgworkers::{BackgroundWorker, BackgroundWorkerBuilder, SignalWakeFlags};
+use pgrx::bgworkers::{BackgroundWorker, BackgroundWorkerBuilder, BgWorkerStartTime, SignalWakeFlags};
 use pgrx::prelude::*;
 use std::time::Duration;
 
+mod apply;
 mod config;
 mod raft_node;
 mod state;
@@ -21,6 +22,7 @@ pub extern "C-unwind" fn _PG_init() {
         .set_function("pg_replica_supervisor_main")
         .set_library("pg_replica")
         .set_restart_time(Some(Duration::from_secs(5)))
+        .set_start_time(BgWorkerStartTime::ConsistentState)
         .load();
 }
 
@@ -55,8 +57,24 @@ pub extern "C-unwind" fn pg_replica_supervisor_main(_arg: pg_sys::Datum) {
         }
     };
 
+    let pg_members = transport::parse_peers(&config::pg_addrs());
+    let psql = config::psql();
+    let pgbin = apply::parent_dir(&psql);
+    let rejoin_script = config::rejoin_script();
+    let (my_host, my_port) = apply::split_host_port(
+        &pg_members
+            .iter()
+            .find(|member| member.id == node_id)
+            .map(|member| member.addr.clone())
+            .unwrap_or_default(),
+    );
+
     let mut node = raft_node::Node::new(node_id, voters);
     let mut last = String::new();
+    let mut promoted = false;
+    let mut fenced = false;
+    let mut rejoining = false;
+    let mut applied_leader: u64 = 0;
 
     while BackgroundWorker::wait_latch(Some(Duration::from_millis(100))) {
         while let Some((_from, payload)) = net.try_recv() {
@@ -65,15 +83,125 @@ pub extern "C-unwind" fn pg_replica_supervisor_main(_arg: pg_sys::Datum) {
         node.tick();
         node.drain_ready(|to, bytes| net.send(to, bytes));
 
+        let role = node.role_name();
+        let leader = node.leader_id();
+        let repl = if role == "leader" {
+            String::from("primary")
+        } else if leader != 0 {
+            match pg_members.iter().find(|member| member.id == leader) {
+                Some(member) => format!("standby<-{}", member.addr),
+                None => String::from("standby<-?"),
+            }
+        } else {
+            String::from("electing")
+        };
+
+        let in_recovery = unsafe { pg_sys::RecoveryInProgress() };
         let snapshot = format!(
-            "{} term={} leader={}",
-            node.role_name(),
+            "{} term={} leader={} | repl={} in_recovery={}",
+            role,
             node.term(),
-            node.leader_id()
+            leader,
+            repl,
+            in_recovery
         );
         if snapshot != last {
             pgrx::log!("pg_replica: node {} -> {}", node_id, snapshot);
             state::write(node_id, &snapshot);
+
+            if role == "leader" && in_recovery && !promoted {
+                pgrx::log!("pg_replica: node {} APPLY promote (standby -> primary)", node_id);
+                match apply::run_sql(&psql, &my_host, &my_port, "SELECT pg_promote(false)") {
+                    Ok(_) => {
+                        promoted = true;
+                        let _ = apply::run_sql(
+                            &psql,
+                            &my_host,
+                            &my_port,
+                            "ALTER SYSTEM SET default_transaction_read_only = off",
+                        );
+                        let _ = apply::run_sql(&psql, &my_host, &my_port, "SELECT pg_reload_conf()");
+                        fenced = false;
+                    }
+                    Err(error) => {
+                        pgrx::log!("pg_replica: node {} promote failed: {}", node_id, error)
+                    }
+                }
+            } else if role == "follower" && !in_recovery && leader != 0 {
+                if !fenced {
+                    pgrx::log!(
+                        "pg_replica: node {} FENCE deposed primary -> read-only (leader is {})",
+                        node_id,
+                        leader
+                    );
+                    if apply::run_sql(
+                        &psql,
+                        &my_host,
+                        &my_port,
+                        "ALTER SYSTEM SET default_transaction_read_only = on",
+                    )
+                    .is_ok()
+                    {
+                        let _ = apply::run_sql(&psql, &my_host, &my_port, "SELECT pg_reload_conf()");
+                        fenced = true;
+                    }
+                }
+                if !rejoining && !rejoin_script.is_empty() {
+                    if let Some(member) = pg_members.iter().find(|member| member.id == leader) {
+                        let (leader_host, leader_port) = apply::split_host_port(&member.addr);
+                        let datadir =
+                            apply::run_sql(&psql, &my_host, &my_port, "SHOW data_directory")
+                                .unwrap_or_default();
+                        if !datadir.is_empty() {
+                            pgrx::log!(
+                                "pg_replica: node {} REJOIN spawn (rewind against leader {} {})",
+                                node_id,
+                                leader,
+                                member.addr
+                            );
+                            apply::spawn_rejoin(
+                                &rejoin_script,
+                                &pgbin,
+                                &datadir,
+                                &leader_host,
+                                &leader_port,
+                                node_id,
+                            );
+                            rejoining = true;
+                        }
+                    }
+                }
+            } else if role == "follower" && in_recovery && leader != 0 && leader != applied_leader {
+                if let Some(member) = pg_members.iter().find(|member| member.id == leader) {
+                    let (leader_host, leader_port) = apply::split_host_port(&member.addr);
+                    let conninfo = format!(
+                        "host={} port={} user=replicator application_name=node{}",
+                        leader_host, leader_port, node_id
+                    );
+                    pgrx::log!(
+                        "pg_replica: node {} APPLY repoint standby -> leader {} ({})",
+                        node_id,
+                        leader,
+                        member.addr
+                    );
+                    match apply::run_sql(
+                        &psql,
+                        &my_host,
+                        &my_port,
+                        &format!("ALTER SYSTEM SET primary_conninfo = '{}'", conninfo),
+                    ) {
+                        Ok(_) => {
+                            let _ =
+                                apply::run_sql(&psql, &my_host, &my_port, "SELECT pg_reload_conf()");
+                            applied_leader = leader;
+                        }
+                        Err(error) => {
+                            pgrx::log!("pg_replica: node {} repoint failed: {}", node_id, error)
+                        }
+                    }
+                }
+            }
+
             last = snapshot;
         }
     }

@@ -7,6 +7,8 @@ A PostgreSQL extension that gives a small cluster of **vanilla Postgres** nodes
 roles, DDL, *everything*) with a **built-in Raft group** and **no external
 dependencies**: no etcd, no Consul, no Kubernetes.
 
+Replaces Patroni, CloudNativePG, pgActive and many more.
+
 One job: keep a single leader elected and the data byte-identical across N nodes,
 and fail over automatically when the leader dies. Do that one job well.
 
@@ -33,11 +35,32 @@ DCS.
 Result: roles, DDL, and data stay consistent on every node, and a dead primary
 is replaced in seconds — with no human, no etcd, no Kubernetes.
 
-> The naive version of this project is "use Raft to replicate the data." That is
-> the wrong design and we explicitly reject it — see
-> [docs/DECISIONS.md](docs/DECISIONS.md#d1-raft-replicates-control-state-not-data).
-> Raft replicates only the tiny **cluster-control state** (who is leader, who is
-> in the group, failover decisions). The bulk data rides Postgres WAL.
+---
+
+## Test
+
+```bash
+# Build dependencies
+
+sudo apt-get update
+sudo apt-get install -y \
+  build-essential pkg-config libssl-dev \
+  libreadline-dev zlib1g-dev flex bison \
+  libxml2-dev libxslt-dev libxml2-utils xsltproc \
+  ccache libclang-dev clang
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+source "$HOME/.cargo/env"
+rustup default stable
+rustc --version
+
+# test dependencies
+cargo install --locked cargo-pgrx --version 0.18.1
+cargo pgrx init
+cd extension
+cargo pgrx run pg18
+
+CREATE EXTENSION pg_replica;
+```
 
 ---
 

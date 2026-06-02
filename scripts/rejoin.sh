@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+set -uo pipefail
+
+PGBIN="$1"
+DATADIR="$2"
+LEADER_HOST="$3"
+LEADER_PORT="$4"
+NODE_ID="$5"
+
+LOG="$(dirname "$DATADIR")/$(basename "$DATADIR").log"
+
+log() { echo "[rejoin $(date -u +%H:%M:%S)] $*" >>"$LOG"; }
+
+log "stopping deposed primary at $DATADIR"
+"$PGBIN/pg_ctl" -D "$DATADIR" stop -m fast >>"$LOG" 2>&1 || true
+
+CONF_SAVE="$(dirname "$DATADIR")/$(basename "$DATADIR").conf.save"
+cp "$DATADIR/postgresql.conf" "$CONF_SAVE"
+
+log "pg_rewind against leader $LEADER_HOST:$LEADER_PORT"
+if ! "$PGBIN/pg_rewind" \
+  --target-pgdata="$DATADIR" \
+  --source-server="host=$LEADER_HOST port=$LEADER_PORT user=postgres dbname=postgres" \
+  --progress >>"$LOG" 2>&1; then
+  log "pg_rewind FAILED; leaving node stopped for manual recovery"
+  exit 1
+fi
+
+cp "$CONF_SAVE" "$DATADIR/postgresql.conf"
+
+{
+  echo "primary_conninfo = 'host=$LEADER_HOST port=$LEADER_PORT user=replicator application_name=node$NODE_ID'"
+  echo "default_transaction_read_only = off"
+} >> "$DATADIR/postgresql.auto.conf"
+touch "$DATADIR/standby.signal"
+
+log "starting as standby of $LEADER_HOST:$LEADER_PORT"
+"$PGBIN/pg_ctl" -D "$DATADIR" -l "$LOG" start >>"$LOG" 2>&1
+log "rejoin complete"

@@ -25,10 +25,13 @@ if [ "${1:-up}" = "down" ]; then
 fi
 
 PEERS=""
+PG_ADDRS=""
 for i in $(seq 1 "$NODES"); do
   PEERS+="${i}@127.0.0.1:$((BASE_RAFT + i - 1)),"
+  PG_ADDRS+="${i}@127.0.0.1:$((BASE_PGPORT + i - 1)),"
 done
 PEERS="${PEERS%,}"
+PG_ADDRS="${PG_ADDRS%,}"
 
 stop_cluster
 rm -rf "$ROOT"
@@ -48,6 +51,7 @@ shared_preload_libraries = 'pg_replica'
 pg_replica.node_id = $i
 pg_replica.raft_port = $raft
 pg_replica.peers = '$PEERS'
+pg_replica.pg_addrs = '$PG_ADDRS'
 EOF
 
   "$PGBIN/pg_ctl" -D "$d" -l "$d/pg.log" start >/dev/null
