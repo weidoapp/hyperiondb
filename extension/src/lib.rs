@@ -3,6 +3,8 @@ use pgrx::prelude::*;
 use std::time::Duration;
 
 mod config;
+mod raft_node;
+mod transport;
 
 pgrx::pg_module_magic!();
 
@@ -25,15 +27,53 @@ pub extern "C-unwind" fn _PG_init() {
 #[unsafe(no_mangle)]
 pub extern "C-unwind" fn pg_replica_supervisor_main(_arg: pg_sys::Datum) {
     BackgroundWorker::attach_signal_handlers(SignalWakeFlags::SIGHUP | SignalWakeFlags::SIGTERM);
+
+    let node_id = config::node_id() as u64;
+    let port = config::raft_port() as u16;
+    let peers = transport::parse_peers(&config::peers());
+    let voters: Vec<u64> = peers.iter().map(|peer| peer.id).collect();
+
     pgrx::log!(
-        "pg_replica: supervisor started (node_id={}, raft_port={}, peers=[{}])",
-        config::node_id(),
-        config::raft_port(),
-        config::peers()
+        "pg_replica: supervisor started (node_id={}, raft_port={}, voters={:?})",
+        node_id,
+        port,
+        voters
     );
 
-    while BackgroundWorker::wait_latch(Some(Duration::from_secs(10))) {
-        pgrx::log!("pg_replica: up");
+    if node_id == 0 || voters.is_empty() {
+        pgrx::log!("pg_replica: not configured (node_id/peers unset); idling");
+        while BackgroundWorker::wait_latch(Some(Duration::from_secs(10))) {}
+        return;
+    }
+
+    let net = match transport::Transport::start(node_id, port, &peers) {
+        Ok(net) => net,
+        Err(error) => {
+            pgrx::log!("pg_replica: transport bind failed on {}: {}", port, error);
+            return;
+        }
+    };
+
+    let mut node = raft_node::Node::new(node_id, voters);
+    let mut last = String::new();
+
+    while BackgroundWorker::wait_latch(Some(Duration::from_millis(100))) {
+        while let Some((_from, payload)) = net.try_recv() {
+            node.step_bytes(&payload);
+        }
+        node.tick();
+        node.drain_ready(|to, bytes| net.send(to, bytes));
+
+        let snapshot = format!(
+            "{} term={} leader={}",
+            node.role_name(),
+            node.term(),
+            node.leader_id()
+        );
+        if snapshot != last {
+            pgrx::log!("pg_replica: node {} -> {}", node_id, snapshot);
+            last = snapshot;
+        }
     }
 
     pgrx::log!("pg_replica: supervisor shutting down");

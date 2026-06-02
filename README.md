@@ -1,4 +1,6 @@
-# pg_replica
+# HyperionDb
+
+[image](media/header.jpg)
 
 A PostgreSQL extension that gives a small cluster of **vanilla Postgres** nodes
 **automatic, consensus-driven failover** — full-cluster replication (tables,
