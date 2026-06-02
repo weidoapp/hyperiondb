@@ -1,0 +1,9 @@
+/target
+**/*.rs.bk
+Cargo.lock
+*.so
+.pgrx/
+/data/
+*.log
+.DS_Store
+extension/target/
