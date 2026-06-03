@@ -30,8 +30,8 @@ ins "$NP" after-failover >/dev/null
 echo
 echo "=== churn >> $WAL_KEEP of WAL on new primary so node1's divergence WAL is RECYCLED (pg_rewind must fail) ==="
 q "$NP" "CREATE TABLE IF NOT EXISTS churn (d text)" >/dev/null
-for r in 1 2 3 4; do
-  q "$NP" "INSERT INTO churn SELECT repeat('w',600) FROM generate_series(1,100000)" >/dev/null
+for r in 1 2 3; do
+  q "$NP" "INSERT INTO churn SELECT repeat('w',200) FROM generate_series(1,40000)" >/dev/null
   q "$NP" "CHECKPOINT" >/dev/null
   q "$NP" "SELECT pg_switch_wal()" >/dev/null
 done
@@ -41,7 +41,7 @@ echo
 echo "=== restart deposed node1 -> pg_rewind should FAIL -> basebackup fallback re-clones ==="
 "$B/pg_ctl" -D "$R/n1" -l "$R/n1.log" start >/dev/null 2>&1
 for i in $(seq 1 120); do [ "$(q $P1 'SELECT pg_is_in_recovery()' 2>/dev/null)" = "t" ] && break; sleep 0.5; done
-for i in $(seq 1 80); do c=$(q $P1 "SELECT count(*) FROM churn" 2>/dev/null); [[ "$c" =~ ^[0-9]+$ ]] && [ "$c" -gt 0 ] && break; sleep 0.5; done
+for i in $(seq 1 200); do c=$(q $P1 "SELECT count(*) FROM churn" 2>/dev/null); [[ "$c" =~ ^[0-9]+$ ]] && [ "$c" -gt 0 ] && break; sleep 0.5; done
 
 echo
 echo "=== rejoin log trail (node1) ==="

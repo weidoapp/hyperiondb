@@ -37,6 +37,8 @@ impl Transport {
         let (in_tx, in_rx) = channel::<(u64, Vec<u8>)>();
 
         let listener = TcpListener::bind(("0.0.0.0", listen_port))?;
+
+        let saved = block_all_signals();
         thread::spawn(move || accept_loop(listener, in_tx));
 
         let mut outbound = HashMap::new();
@@ -49,6 +51,7 @@ impl Transport {
             thread::spawn(move || sender_loop(addr, node_id, out_rx));
             outbound.insert(peer.id, out_tx);
         }
+        restore_signals(saved);
 
         Ok(Transport {
             inbound: in_rx,
@@ -70,6 +73,22 @@ impl Transport {
 
     pub fn try_recv(&self) -> Option<(u64, Vec<u8>)> {
         self.inbound.try_recv().ok()
+    }
+}
+
+fn block_all_signals() -> libc::sigset_t {
+    unsafe {
+        let mut all: libc::sigset_t = std::mem::zeroed();
+        let mut old: libc::sigset_t = std::mem::zeroed();
+        libc::sigfillset(&mut all);
+        libc::pthread_sigmask(libc::SIG_SETMASK, &all, &mut old);
+        old
+    }
+}
+
+fn restore_signals(old: libc::sigset_t) {
+    unsafe {
+        libc::pthread_sigmask(libc::SIG_SETMASK, &old, std::ptr::null_mut());
     }
 }
 

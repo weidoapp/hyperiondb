@@ -1,0 +1,13 @@
+[package]
+name = "chaos-writer"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[[bin]]
+name = "chaos-writer"
+path = "src/main.rs"
+
+[dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
+tokio-postgres = "0.7"

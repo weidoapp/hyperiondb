@@ -72,6 +72,31 @@ pub fn spawn_watchdog(
         .is_ok()
 }
 
+pub fn peer_wal_lsn(psql: &str, host: &str, port: &str) -> Option<u64> {
+    let output = Command::new(psql)
+        .args([
+            "-h", host,
+            "-p", port,
+            "-U", "postgres",
+            "-d", "postgres",
+            "-w",
+            "-tAc",
+            "SELECT pg_wal_lsn_diff(COALESCE(pg_last_wal_receive_lsn(), '0/0'), '0/0')::bigint",
+        ])
+        .env("PGCONNECT_TIMEOUT", "1")
+        .output()
+        .ok()?;
+    if output.status.success() {
+        String::from_utf8_lossy(&output.stdout)
+            .trim()
+            .parse::<i64>()
+            .ok()
+            .map(|value| value.max(0) as u64)
+    } else {
+        None
+    }
+}
+
 pub fn wal_lsn(psql: &str, host: &str, port: &str, in_recovery: bool) -> u64 {
     let sql = if in_recovery {
         "SELECT pg_wal_lsn_diff(COALESCE(pg_last_wal_receive_lsn(), '0/0'), '0/0')::bigint"

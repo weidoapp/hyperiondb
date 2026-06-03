@@ -1,8 +1,10 @@
 use pgrx::guc::{GucContext, GucFlags, GucRegistry, GucSetting};
 use std::ffi::CString;
 
+pub static SYNCHRONOUS: GucSetting<bool> = GucSetting::<bool>::new(false);
 pub static NODE_ID: GucSetting<i32> = GucSetting::<i32>::new(0);
 pub static RAFT_PORT: GucSetting<i32> = GucSetting::<i32>::new(7400);
+pub static COMPACT_THRESHOLD: GucSetting<i32> = GucSetting::<i32>::new(64);
 pub static PEERS: GucSetting<Option<CString>> = GucSetting::<Option<CString>>::new(None);
 pub static PG_ADDRS: GucSetting<Option<CString>> = GucSetting::<Option<CString>>::new(None);
 pub static PSQL: GucSetting<Option<CString>> = GucSetting::<Option<CString>>::new(None);
@@ -11,12 +13,32 @@ pub static WATCHDOG_SCRIPT: GucSetting<Option<CString>> = GucSetting::<Option<CS
 pub static RAFT_DIR: GucSetting<Option<CString>> = GucSetting::<Option<CString>>::new(None);
 
 pub fn init() {
+    GucRegistry::define_bool_guc(
+        c"pg_replica.synchronous",
+        c"Quorum-synchronous replication: withhold COMMIT ack until a quorum of standbys has the WAL.",
+        c"When on, the primary maintains synchronous_standby_names = 'ANY <majority-1> (peers)' so every acked transaction is on a majority of nodes (zero loss on failover). Off = async.",
+        &SYNCHRONOUS,
+        GucContext::Postmaster,
+        GucFlags::default(),
+    );
+
     GucRegistry::define_int_guc(
         c"pg_replica.node_id",
         c"This node's Raft id, unique across the cluster.",
         c"A positive integer set in postgresql.conf. 0 means unconfigured.",
         &NODE_ID,
         0,
+        i32::MAX,
+        GucContext::Postmaster,
+        GucFlags::default(),
+    );
+
+    GucRegistry::define_int_guc(
+        c"pg_replica.compact_threshold",
+        c"Compact the Raft log once this many applied entries accumulate past the snapshot.",
+        c"Folds the applied log into a snapshot (data = latest decision) to bound log/disk growth.",
+        &COMPACT_THRESHOLD,
+        1,
         i32::MAX,
         GucContext::Postmaster,
         GucFlags::default(),
@@ -92,8 +114,16 @@ pub fn node_id() -> i32 {
     NODE_ID.get()
 }
 
+pub fn synchronous() -> bool {
+    SYNCHRONOUS.get()
+}
+
 pub fn raft_port() -> i32 {
     RAFT_PORT.get()
+}
+
+pub fn compact_threshold() -> i32 {
+    COMPACT_THRESHOLD.get()
 }
 
 pub fn peers() -> String {

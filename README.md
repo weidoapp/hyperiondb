@@ -47,7 +47,8 @@ sudo apt-get install -y \
   build-essential pkg-config libssl-dev \
   libreadline-dev zlib1g-dev flex bison \
   libxml2-dev libxslt-dev libxml2-utils xsltproc \
-  ccache libclang-dev clang
+  ccache libclang-dev clang \
+  iptables libfaketime
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
 source "$HOME/.cargo/env"
 rustup default stable
@@ -61,6 +62,31 @@ cargo pgrx run pg18
 
 CREATE EXTENSION pg_replica;
 ```
+
+### Run the whole test suite
+
+One command builds the extension + test clients and runs every test (3-node
+clusters in `/tmp`, torn down between each):
+
+```bash
+bash scripts/run-all-tests.sh            # build, then run all tests + summary
+bash scripts/run-all-tests.sh --no-build # skip the rebuild
+```
+
+Coverage (`scripts/test-*.sh`, each spins a real 3-node cluster):
+
+| Test | Proves |
+|------|--------|
+| `test-m3-lsn` | failover promotes the **highest-LSN** survivor (no data loss) |
+| `test-m4-fence` | minority primary **self-demotes** read-only (no split-brain) |
+| `test-m4-watchdog` | a **hung** control plane is fenced by the deadman watchdog |
+| `test-m4-partition` | a **network-partitioned** (but running) primary self-demotes |
+| `test-m5-rejoin` | deposed primary `pg_rewind`-rejoins as a standby |
+| `test-m5-walgone` | WAL gone → automatic **`pg_basebackup` re-clone** |
+| `test-compaction` | Raft log stays **bounded** via snapshotting |
+| `test-m6-routing` | a multi-host client **follows the failover** with only a reconnect |
+| `test-m7-sync` | quorum-sync = **zero committed-transaction loss** on failover |
+| `test-chaos` | Jepsen-style: continuous writer under partitions / SIGSTOP / kill / clock-skew / slow-disk / rolling-restart — **0 split-brain**, converges, zero-loss for clean failovers |
 
 ---
 
@@ -108,4 +134,4 @@ shipped as a plain Postgres extension. Closest existing thing is Patroni's
 **Design / planning.** No code yet. Start with:
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — components, failover flow, fencing, the hard problems.
 - [docs/DECISIONS.md](docs/DECISIONS.md) — the load-bearing design choices and why.
-- [docs/ROADMAP.md](docs/ROADMAP.md) — phased milestones with "done" criteria.
+- [docs/TODO.md](docs/TODO.md) — phased milestones

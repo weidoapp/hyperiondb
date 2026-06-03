@@ -11,8 +11,8 @@ LOG="$(dirname "$DATADIR")/$(basename "$DATADIR").log"
 
 log() { echo "[rejoin $(date -u +%H:%M:%S)] $*" >>"$LOG"; }
 
-log "stopping deposed primary at $DATADIR"
-"$PGBIN/pg_ctl" -D "$DATADIR" stop -m fast >>"$LOG" 2>&1 || true
+log "stopping deposed primary at $DATADIR (immediate: never let a graceful shutdown locally-commit an in-flight sync write that rewind will discard)"
+"$PGBIN/pg_ctl" -D "$DATADIR" stop -m immediate >>"$LOG" 2>&1 || true
 
 CONF_SAVE="$(dirname "$DATADIR")/$(basename "$DATADIR").conf.save"
 cp "$DATADIR/postgresql.conf" "$CONF_SAVE"

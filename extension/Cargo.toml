@@ -23,6 +23,7 @@ pgrx = "=0.18.1"
 raft = { version = "0.7.0", default-features = false, features = ["protobuf-codec"] }
 slog = "2.2"
 protobuf = "2"
+libc = "0.2"
 
 [dev-dependencies]
 pgrx-tests = "=0.18.1"

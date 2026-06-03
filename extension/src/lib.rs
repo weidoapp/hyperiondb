@@ -73,6 +73,18 @@ pub extern "C-unwind" fn pg_replica_supervisor_main(_arg: pg_sys::Datum) {
     );
 
     let majority = voters.len() / 2 + 1;
+    let sync_quorum = majority.saturating_sub(1);
+    let sync_target = if sync_quorum >= 1 {
+        let names: Vec<String> = voters
+            .iter()
+            .filter(|&&voter| voter != node_id)
+            .map(|voter| format!("node{}", voter))
+            .collect();
+        format!("ANY {} ({})", sync_quorum, names.join(", "))
+    } else {
+        String::new()
+    };
+    let synchronous = config::synchronous();
     let raft_dir = config::raft_dir();
     let heartbeat_file = format!("{}/pg_replica_hb_{}", raft_dir, node_id);
     let watchdog_script = config::watchdog_script();
@@ -83,15 +95,24 @@ pub extern "C-unwind" fn pg_replica_supervisor_main(_arg: pg_sys::Datum) {
         }
     }
 
+    let compact_threshold = config::compact_threshold().max(1) as u64;
     let (mut node, recovered) =
         raft_node::Node::new(node_id, voters, std::path::PathBuf::from(&raft_dir));
+    let seeded = recovered
+        .decision
+        .as_deref()
+        .and_then(failover::decode_decision);
     pgrx::log!(
-        "pg_replica: node {} raft storage {}",
+        "pg_replica: node {} raft storage {}{}",
         node_id,
-        if recovered {
-            "recovered from disk"
-        } else {
+        if recovered.fresh {
             "initialized fresh"
+        } else {
+            "recovered from disk"
+        },
+        match seeded {
+            Some(decision) => format!(" (seq={} primary={})", decision.seq, decision.primary),
+            None => String::new(),
         }
     );
     let mut last = String::new();
@@ -99,12 +120,13 @@ pub extern "C-unwind" fn pg_replica_supervisor_main(_arg: pg_sys::Datum) {
     let mut last_heard: HashMap<u64, Instant> = HashMap::new();
     let mut peers_reconfirm: HashMap<u64, bool> = HashMap::new();
     let mut reconfirm_pending = false;
-    let mut decided: Option<failover::Decision> = None;
+    let mut decided: Option<failover::Decision> = seeded;
     let mut last_proposed: (u64, u64) = (0, 0);
     let mut promoted = false;
     let mut rejoining = false;
     let mut applied_primary: u64 = 0;
     let mut applied_read_only: Option<bool> = None;
+    let mut applied_sync: Option<String> = None;
     let mut authorized_since: Option<Instant> = None;
     let mut ticks: u64 = 0;
     let gossip_every: u64 = 5;
@@ -142,7 +164,7 @@ pub extern "C-unwind" fn pg_replica_supervisor_main(_arg: pg_sys::Datum) {
         }
 
         node.tick();
-        let committed = node.drain_ready(|to, bytes| {
+        let progress = node.drain_ready(|to, bytes| {
             let mut framed = Vec::with_capacity(1 + bytes.len());
             framed.push(failover::KIND_RAFT);
             framed.extend_from_slice(&bytes);
@@ -150,7 +172,7 @@ pub extern "C-unwind" fn pg_replica_supervisor_main(_arg: pg_sys::Datum) {
         });
 
         let mut newest: Option<failover::Decision> = None;
-        for data in &committed {
+        for data in progress.snapshot.iter().chain(progress.committed.iter()) {
             if let Some(decision) = failover::decode_decision(data) {
                 if newest.map_or(true, |current| decision.seq > current.seq) {
                     newest = Some(decision);
@@ -164,6 +186,7 @@ pub extern "C-unwind" fn pg_replica_supervisor_main(_arg: pg_sys::Datum) {
                 rejoining = false;
                 applied_primary = 0;
                 reconfirm_pending = false;
+                node.set_snapshot_data(failover::encode_decision(decision));
                 pgrx::log!(
                     "pg_replica: node {} DECISION seq={} primary={}",
                     node_id,
@@ -171,6 +194,10 @@ pub extern "C-unwind" fn pg_replica_supervisor_main(_arg: pg_sys::Datum) {
                     decision.primary
                 );
             }
+        }
+
+        if let Some(index) = node.maybe_compact(compact_threshold) {
+            pgrx::log!("pg_replica: node {} compacted raft log to index {}", node_id, index);
         }
 
         let in_recovery = unsafe { pg_sys::RecoveryInProgress() };
@@ -210,7 +237,23 @@ pub extern "C-unwind" fn pg_replica_supervisor_main(_arg: pg_sys::Datum) {
                     .map(|member| member.0)
                     .min()
             } else if !primary_alive {
-                failover::choose_primary(&live)
+                let fresh: Vec<(u64, u64, bool)> = live
+                    .iter()
+                    .map(|&(id, gossiped, in_rec)| {
+                        let lsn = if id == node_id {
+                            apply::wal_lsn(&psql, &my_host, &my_port, in_recovery)
+                        } else if let Some(member) =
+                            pg_members.iter().find(|member| member.id == id)
+                        {
+                            let (host, port) = apply::split_host_port(&member.addr);
+                            apply::peer_wal_lsn(&psql, &host, &port).unwrap_or(gossiped)
+                        } else {
+                            gossiped
+                        };
+                        (id, lsn, in_rec)
+                    })
+                    .collect();
+                failover::choose_primary(&fresh)
             } else if needs_reconfirm {
                 Some(current_primary)
             } else {
@@ -249,13 +292,35 @@ pub extern "C-unwind" fn pg_replica_supervisor_main(_arg: pg_sys::Datum) {
             })
             .count();
         let quorum_ok = 1 + reachable >= majority;
-
         if in_recovery {
             applied_read_only = None;
             authorized_since = None;
+            if applied_sync.as_deref() != Some("") {
+                if apply::run_sql(
+                    &psql,
+                    &my_host,
+                    &my_port,
+                    "ALTER SYSTEM SET synchronous_standby_names = ''",
+                )
+                .is_ok()
+                {
+                    let _ = apply::run_sql(&psql, &my_host, &my_port, "SELECT pg_reload_conf()");
+                    applied_sync = Some(String::new());
+                }
+            }
             if decided_primary == node_id {
                 if !promoted {
-                    pgrx::log!("pg_replica: node {} APPLY promote (standby -> primary)", node_id);
+                    pgrx::log!(
+                        "pg_replica: node {} APPLY promote (standby -> primary, fenced until authorized)",
+                        node_id
+                    );
+                    let _ = apply::run_sql(
+                        &psql,
+                        &my_host,
+                        &my_port,
+                        "ALTER SYSTEM SET default_transaction_read_only = on",
+                    );
+                    let _ = apply::run_sql(&psql, &my_host, &my_port, "SELECT pg_reload_conf()");
                     match apply::run_sql(&psql, &my_host, &my_port, "SELECT pg_promote(false)") {
                         Ok(_) => promoted = true,
                         Err(error) => {
@@ -306,24 +371,76 @@ pub extern "C-unwind" fn pg_replica_supervisor_main(_arg: pg_sys::Datum) {
                 let since = *authorized_since.get_or_insert_with(Instant::now);
                 Instant::now().duration_since(since) >= confirm_window
             };
+            // want_sync = None means LEAVE synchronous_standby_names unchanged: critical for a
+            // primary that is losing authority while a sync commit is in flight — clearing it
+            // would let Postgres complete that commit LOCALLY (false ack) and then rewind it away.
+            // Set it only when authorized; clear it only when sync is globally off (no in-flight
+            // sync commits to mis-ack). Standbys clear it in the in_recovery branch.
+            let want_sync: Option<&str> = if !synchronous {
+                Some("")
+            } else if authorized && decided.is_some() {
+                Some(sync_target.as_str())
+            } else {
+                None
+            };
             let want_read_only = !authorized;
-            if applied_read_only != Some(want_read_only) {
-                let sql = if want_read_only {
-                    "ALTER SYSTEM SET default_transaction_read_only = on"
-                } else {
-                    "ALTER SYSTEM SET default_transaction_read_only = off"
-                };
-                if apply::run_sql(&psql, &my_host, &my_port, sql).is_ok() {
+
+            // Invariant: a writable primary always has sync configured. So fence first
+            // (always safe), then (re)configure sync, then unfence last — never a window
+            // where read_only=off but synchronous_standby_names is stale/empty.
+            if want_read_only && applied_read_only != Some(true) {
+                if apply::run_sql(
+                    &psql,
+                    &my_host,
+                    &my_port,
+                    "ALTER SYSTEM SET default_transaction_read_only = on",
+                )
+                .is_ok()
+                {
                     let _ = apply::run_sql(&psql, &my_host, &my_port, "SELECT pg_reload_conf()");
-                    applied_read_only = Some(want_read_only);
+                    applied_read_only = Some(true);
                     pgrx::log!(
-                        "pg_replica: node {} {} (decided_primary={} quorum_ok={})",
+                        "pg_replica: node {} FENCE -> read-only (decided_primary={} quorum_ok={})",
                         node_id,
-                        if want_read_only {
-                            "FENCE -> read-only"
-                        } else {
-                            "UNFENCE -> read-write"
-                        },
+                        decided_primary,
+                        quorum_ok
+                    );
+                }
+            }
+            if let Some(want_sync) = want_sync {
+            if applied_sync.as_deref() != Some(want_sync) {
+                if apply::run_sql(
+                    &psql,
+                    &my_host,
+                    &my_port,
+                    &format!("ALTER SYSTEM SET synchronous_standby_names = '{}'", want_sync),
+                )
+                .is_ok()
+                {
+                    let _ = apply::run_sql(&psql, &my_host, &my_port, "SELECT pg_reload_conf()");
+                    applied_sync = Some(want_sync.to_string());
+                    pgrx::log!(
+                        "pg_replica: node {} synchronous_standby_names = '{}'",
+                        node_id,
+                        want_sync
+                    );
+                }
+            }
+            }
+            if !want_read_only && applied_read_only != Some(false) {
+                if apply::run_sql(
+                    &psql,
+                    &my_host,
+                    &my_port,
+                    "ALTER SYSTEM SET default_transaction_read_only = off",
+                )
+                .is_ok()
+                {
+                    let _ = apply::run_sql(&psql, &my_host, &my_port, "SELECT pg_reload_conf()");
+                    applied_read_only = Some(false);
+                    pgrx::log!(
+                        "pg_replica: node {} UNFENCE -> read-write (decided_primary={} quorum_ok={})",
+                        node_id,
                         decided_primary,
                         quorum_ok
                     );

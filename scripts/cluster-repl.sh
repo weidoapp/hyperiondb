@@ -42,6 +42,7 @@ PGP1=$BASE_PGPORT
 cat >> "$P1/postgresql.conf" <<EOF
 port = $PGP1
 listen_addresses = '127.0.0.1'
+cluster_name = 'node1'
 wal_level = replica
 max_wal_senders = 10
 max_replication_slots = 10
@@ -52,6 +53,8 @@ max_wal_size = '${MAX_WAL:-1GB}'
 shared_preload_libraries = 'pg_replica'
 pg_replica.node_id = 1
 pg_replica.raft_port = $BASE_RAFT
+pg_replica.synchronous = ${SYNCHRONOUS:-off}
+pg_replica.compact_threshold = ${COMPACT_THRESHOLD:-64}
 pg_replica.peers = '$PEERS'
 pg_replica.pg_addrs = '$PG_ADDRS'
 pg_replica.psql = '$PGBIN/psql'
@@ -76,6 +79,7 @@ for i in 2 3; do
   "$PGBIN/pg_basebackup" -h 127.0.0.1 -p "$PGP1" -U replicator -D "$d" -R -X stream >/dev/null
   cat >> "$d/postgresql.conf" <<EOF
 port = $pgp
+cluster_name = 'node$i'
 pg_replica.node_id = $i
 pg_replica.raft_port = $raft
 EOF
