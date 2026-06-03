@@ -7,6 +7,7 @@ pub static PEERS: GucSetting<Option<CString>> = GucSetting::<Option<CString>>::n
 pub static PG_ADDRS: GucSetting<Option<CString>> = GucSetting::<Option<CString>>::new(None);
 pub static PSQL: GucSetting<Option<CString>> = GucSetting::<Option<CString>>::new(None);
 pub static REJOIN_SCRIPT: GucSetting<Option<CString>> = GucSetting::<Option<CString>>::new(None);
+pub static WATCHDOG_SCRIPT: GucSetting<Option<CString>> = GucSetting::<Option<CString>>::new(None);
 pub static RAFT_DIR: GucSetting<Option<CString>> = GucSetting::<Option<CString>>::new(None);
 
 pub fn init() {
@@ -69,6 +70,15 @@ pub fn init() {
     );
 
     GucRegistry::define_string_guc(
+        c"pg_replica.watchdog_script",
+        c"Path to a detached deadman watchdog that fences this node read-only if the control plane stalls.",
+        c"Receives: psql host port heartbeat_file node_id. Empty disables the watchdog.",
+        &WATCHDOG_SCRIPT,
+        GucContext::Postmaster,
+        GucFlags::default(),
+    );
+
+    GucRegistry::define_string_guc(
         c"pg_replica.raft_dir",
         c"Directory holding this node's durable Raft state (term/vote/log).",
         c"Must be node-local and outside the Postgres data directory so base backups and pg_rewind never clone it. Empty defaults to /tmp.",
@@ -110,6 +120,13 @@ pub fn psql() -> String {
 
 pub fn rejoin_script() -> String {
     REJOIN_SCRIPT
+        .get()
+        .map(|value| value.to_string_lossy().into_owned())
+        .unwrap_or_default()
+}
+
+pub fn watchdog_script() -> String {
+    WATCHDOG_SCRIPT
         .get()
         .map(|value| value.to_string_lossy().into_owned())
         .unwrap_or_default()

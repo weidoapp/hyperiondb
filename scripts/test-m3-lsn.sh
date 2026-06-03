@@ -53,6 +53,7 @@ for i in $(seq 1 60); do
   echo "$np" | grep -qE "decided_primary=(2|3)" && break
   sleep 0.5
 done
+for i in $(seq 1 30); do [ "$(q $P2 'SELECT pg_is_in_recovery()')" = "f" ] && break; sleep 0.5; done
 
 echo "=== failover decision log ==="
 grep -hE "PROPOSE|DECISION|APPLY promote" "$R"/n2.log "$R"/n3.log 2>/dev/null | tail -8

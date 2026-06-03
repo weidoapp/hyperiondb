@@ -17,6 +17,7 @@ PEERS="${PEERS%,}"
 PG_ADDRS="${PG_ADDRS%,}"
 
 stop_all() {
+  pkill -f "/watchdog.sh " >/dev/null 2>&1 || true
   for d in "$ROOT"/n*; do
     [ -d "$d" ] && "$PGBIN/pg_ctl" -D "$d" stop -m fast >/dev/null 2>&1 || true
   done
@@ -33,6 +34,7 @@ rm -rf "$ROOT"
 mkdir -p "$ROOT"
 rm -f /tmp/pg_replica_*.state
 rm -f /tmp/pg_replica_raft_*.bin
+rm -f /tmp/pg_replica_hb_* /tmp/pg_replica_wd_*.log
 
 P1="$ROOT/n1"
 PGP1=$BASE_PGPORT
@@ -45,7 +47,8 @@ max_wal_senders = 10
 max_replication_slots = 10
 hot_standby = on
 wal_log_hints = on
-wal_keep_size = '512MB'
+wal_keep_size = '${WAL_KEEP:-512MB}'
+max_wal_size = '${MAX_WAL:-1GB}'
 shared_preload_libraries = 'pg_replica'
 pg_replica.node_id = 1
 pg_replica.raft_port = $BASE_RAFT
@@ -53,6 +56,7 @@ pg_replica.peers = '$PEERS'
 pg_replica.pg_addrs = '$PG_ADDRS'
 pg_replica.psql = '$PGBIN/psql'
 pg_replica.rejoin_script = '$SCRIPT_DIR/rejoin.sh'
+pg_replica.watchdog_script = '$SCRIPT_DIR/watchdog.sh'
 EOF
 echo "host replication replicator 127.0.0.1/32 trust" >> "$P1/pg_hba.conf"
 echo "host all         all        127.0.0.1/32 trust" >> "$P1/pg_hba.conf"

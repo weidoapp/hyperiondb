@@ -18,15 +18,24 @@ CONF_SAVE="$(dirname "$DATADIR")/$(basename "$DATADIR").conf.save"
 cp "$DATADIR/postgresql.conf" "$CONF_SAVE"
 
 log "pg_rewind against leader $LEADER_HOST:$LEADER_PORT"
-if ! "$PGBIN/pg_rewind" \
+if "$PGBIN/pg_rewind" \
   --target-pgdata="$DATADIR" \
   --source-server="host=$LEADER_HOST port=$LEADER_PORT user=postgres dbname=postgres" \
   --progress >>"$LOG" 2>&1; then
-  log "pg_rewind FAILED; leaving node stopped for manual recovery"
-  exit 1
+  cp "$CONF_SAVE" "$DATADIR/postgresql.conf"
+  log "pg_rewind succeeded"
+else
+  log "pg_rewind FAILED (WAL diverged past retention); falling back to full pg_basebackup re-clone"
+  rm -rf "$DATADIR"
+  if ! "$PGBIN/pg_basebackup" \
+    -h "$LEADER_HOST" -p "$LEADER_PORT" -U replicator \
+    -D "$DATADIR" -X stream --progress >>"$LOG" 2>&1; then
+    log "pg_basebackup fallback FAILED; leaving node stopped for manual recovery"
+    exit 1
+  fi
+  cp "$CONF_SAVE" "$DATADIR/postgresql.conf"
+  log "pg_basebackup re-clone succeeded"
 fi
-
-cp "$CONF_SAVE" "$DATADIR/postgresql.conf"
 
 {
   echo "primary_conninfo = 'host=$LEADER_HOST port=$LEADER_PORT user=replicator application_name=node$NODE_ID'"

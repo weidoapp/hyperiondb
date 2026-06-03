@@ -4,12 +4,14 @@ pub const KIND_GOSSIP: u8 = 1;
 pub struct Gossip {
     pub lsn: u64,
     pub in_recovery: bool,
+    pub reconfirm: bool,
 }
 
-pub fn encode_gossip(lsn: u64, in_recovery: bool) -> Vec<u8> {
-    let mut buf = Vec::with_capacity(9);
+pub fn encode_gossip(lsn: u64, in_recovery: bool, reconfirm: bool) -> Vec<u8> {
+    let mut buf = Vec::with_capacity(10);
     buf.extend_from_slice(&lsn.to_be_bytes());
     buf.push(in_recovery as u8);
+    buf.push(reconfirm as u8);
     buf
 }
 
@@ -22,6 +24,7 @@ pub fn decode_gossip(bytes: &[u8]) -> Option<Gossip> {
     Some(Gossip {
         lsn: u64::from_be_bytes(lsn),
         in_recovery: bytes[8] != 0,
+        reconfirm: bytes.get(9).map_or(false, |byte| *byte != 0),
     })
 }
 

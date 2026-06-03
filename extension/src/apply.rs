@@ -1,4 +1,5 @@
 use std::process::{Command, Stdio};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 pub fn split_host_port(addr: &str) -> (String, String) {
     match addr.rsplit_once(':') {
@@ -29,6 +30,40 @@ pub fn spawn_rejoin(
         .arg(datadir)
         .arg(leader_host)
         .arg(leader_port)
+        .arg(node_id.to_string())
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .is_ok()
+}
+
+pub fn write_heartbeat(path: &str) {
+    let millis = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_millis())
+        .unwrap_or(0);
+    let tmp = format!("{}.tmp", path);
+    if std::fs::write(&tmp, millis.to_string()).is_ok() {
+        let _ = std::fs::rename(&tmp, path);
+    }
+}
+
+pub fn spawn_watchdog(
+    script: &str,
+    psql: &str,
+    host: &str,
+    port: &str,
+    heartbeat: &str,
+    node_id: u64,
+) -> bool {
+    Command::new("setsid")
+        .arg("bash")
+        .arg(script)
+        .arg(psql)
+        .arg(host)
+        .arg(port)
+        .arg(heartbeat)
         .arg(node_id.to_string())
         .stdin(Stdio::null())
         .stdout(Stdio::null())
