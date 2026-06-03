@@ -17,7 +17,8 @@ FT="/usr/lib/x86_64-linux-gnu/faketime/libfaketime.so.1"
 DEV="8:48"
 P1=54340 P2=54341 P3=54342
 RAFT1=7410 RAFT2=7411 RAFT3=7412
-CI="host=127.0.0.1,127.0.0.1,127.0.0.1 port=$P1,$P2,$P3 user=postgres dbname=postgres target_session_attrs=read-write connect_timeout=2"
+SU_PW="${SU_PW:-supass}"
+CI="host=127.0.0.1,127.0.0.1,127.0.0.1 port=$P1,$P2,$P3 user=postgres password=$SU_PW dbname=postgres target_session_attrs=read-write connect_timeout=2"
 ACKED=/tmp/chaos-acked.log
 STOP=/tmp/chaos-stop
 SB=/tmp/chaos-splitbrain

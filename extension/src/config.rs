@@ -10,6 +10,7 @@ pub static PG_ADDRS: GucSetting<Option<CString>> = GucSetting::<Option<CString>>
 pub static PSQL: GucSetting<Option<CString>> = GucSetting::<Option<CString>>::new(None);
 pub static REJOIN_SCRIPT: GucSetting<Option<CString>> = GucSetting::<Option<CString>>::new(None);
 pub static WATCHDOG_SCRIPT: GucSetting<Option<CString>> = GucSetting::<Option<CString>>::new(None);
+pub static PASSFILE: GucSetting<Option<CString>> = GucSetting::<Option<CString>>::new(None);
 pub static RAFT_DIR: GucSetting<Option<CString>> = GucSetting::<Option<CString>>::new(None);
 
 pub fn init() {
@@ -101,6 +102,15 @@ pub fn init() {
     );
 
     GucRegistry::define_string_guc(
+        c"pg_replica.passfile",
+        c"Path to a libpq passfile (chmod 600) holding the replicator password for streaming replication.",
+        c"Referenced as passfile= in primary_conninfo and PGPASSFILE for pg_basebackup, so the password is never written into postgresql.conf or auto.conf. Empty = no replication auth (trust).",
+        &PASSFILE,
+        GucContext::Postmaster,
+        GucFlags::default(),
+    );
+
+    GucRegistry::define_string_guc(
         c"pg_replica.raft_dir",
         c"Directory holding this node's durable Raft state (term/vote/log).",
         c"Must be node-local and outside the Postgres data directory so base backups and pg_rewind never clone it. Empty defaults to /tmp.",
@@ -157,6 +167,13 @@ pub fn rejoin_script() -> String {
 
 pub fn watchdog_script() -> String {
     WATCHDOG_SCRIPT
+        .get()
+        .map(|value| value.to_string_lossy().into_owned())
+        .unwrap_or_default()
+}
+
+pub fn passfile() -> String {
+    PASSFILE
         .get()
         .map(|value| value.to_string_lossy().into_owned())
         .unwrap_or_default()

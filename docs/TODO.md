@@ -1,11 +1,11 @@
 # TODO
 
-- Auth
 - Packaging
 - Connection pooling/ client
 - Docs
 - Logs
-- slow-disk + kill at once), edge ~0.05% loss remains. Fully closing it needs committed-LSN tracking in the Raft log (Patroni-style)
+- slow-disk + kill at once, edge ~0.05% loss remains. Fully closing it needs committed-LSN tracking in the Raft log (Patroni-style)
+- Integration tests
 
 ## Explicitly out of scope for open source
 

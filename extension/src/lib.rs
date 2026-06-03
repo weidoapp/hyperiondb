@@ -34,6 +34,13 @@ pub extern "C-unwind" fn _PG_init() {
 pub extern "C-unwind" fn pg_replica_supervisor_main(_arg: pg_sys::Datum) {
     BackgroundWorker::attach_signal_handlers(SignalWakeFlags::SIGHUP | SignalWakeFlags::SIGTERM);
 
+    // Set PGPASSFILE before spawning any threads/child psql so every libpq client we shell out
+    // to (local control, peer LSN probe, rejoin) authenticates with SCRAM from the passfile.
+    let auth_passfile = config::passfile();
+    if !auth_passfile.is_empty() {
+        std::env::set_var("PGPASSFILE", &auth_passfile);
+    }
+
     let node_id = config::node_id() as u64;
     let port = config::raft_port() as u16;
     let peers = transport::parse_peers(&config::peers());
@@ -64,6 +71,7 @@ pub extern "C-unwind" fn pg_replica_supervisor_main(_arg: pg_sys::Datum) {
     let psql = config::psql();
     let pgbin = apply::parent_dir(&psql);
     let rejoin_script = config::rejoin_script();
+    let passfile = config::passfile();
     let (my_host, my_port) = apply::split_host_port(
         &pg_members
             .iter()
@@ -331,9 +339,14 @@ pub extern "C-unwind" fn pg_replica_supervisor_main(_arg: pg_sys::Datum) {
             } else if decided_primary != 0 && applied_primary != decided_primary {
                 if let Some(member) = pg_members.iter().find(|member| member.id == decided_primary) {
                     let (primary_host, primary_port) = apply::split_host_port(&member.addr);
+                    let passfile_kw = if passfile.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" passfile={}", passfile)
+                    };
                     let conninfo = format!(
-                        "host={} port={} user=replicator application_name=node{}",
-                        primary_host, primary_port, node_id
+                        "host={} port={} user=replicator{} application_name=node{}",
+                        primary_host, primary_port, passfile_kw, node_id
                     );
                     pgrx::log!(
                         "pg_replica: node {} APPLY repoint standby -> primary {} ({})",
@@ -471,6 +484,7 @@ pub extern "C-unwind" fn pg_replica_supervisor_main(_arg: pg_sys::Datum) {
                             &primary_host,
                             &primary_port,
                             node_id,
+                            &passfile,
                         );
                         rejoining = true;
                     }

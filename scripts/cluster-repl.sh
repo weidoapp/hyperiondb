@@ -36,9 +36,18 @@ rm -f /tmp/pg_replica_*.state
 rm -f /tmp/pg_replica_raft_*.bin
 rm -f /tmp/pg_replica_hb_* /tmp/pg_replica_wd_*.log
 
+REPL_PW="${REPL_PW:-replpass}"
+SU_PW="${SU_PW:-supass}"
+PASSFILE="${PASSFILE:-$HOME/.pgpass}"
+{ printf '*:*:*:replicator:%s\n' "$REPL_PW"; printf '*:*:*:postgres:%s\n' "$SU_PW"; } > "$PASSFILE"
+chmod 600 "$PASSFILE"
+
 P1="$ROOT/n1"
 PGP1=$BASE_PGPORT
-"$PGBIN/initdb" -D "$P1" -U postgres --locale=C.UTF-8 >/dev/null
+SU_PWFILE="$ROOT/.su_pwfile"
+printf '%s\n' "$SU_PW" > "$SU_PWFILE"
+"$PGBIN/initdb" -D "$P1" -U postgres -A scram-sha-256 --pwfile="$SU_PWFILE" --locale=C.UTF-8 >/dev/null
+rm -f "$SU_PWFILE"
 cat >> "$P1/postgresql.conf" <<EOF
 port = $PGP1
 listen_addresses = '127.0.0.1'
@@ -60,13 +69,18 @@ pg_replica.pg_addrs = '$PG_ADDRS'
 pg_replica.psql = '$PGBIN/psql'
 pg_replica.rejoin_script = '$SCRIPT_DIR/rejoin.sh'
 pg_replica.watchdog_script = '$SCRIPT_DIR/watchdog.sh'
+pg_replica.passfile = '$PASSFILE'
 EOF
-echo "host replication replicator 127.0.0.1/32 trust" >> "$P1/pg_hba.conf"
-echo "host all         all        127.0.0.1/32 trust" >> "$P1/pg_hba.conf"
-
+# No trust anywhere: initdb -A scram-sha-256 made every default pg_hba line SCRAM, and
+# initdb --pwfile gave postgres its password (so even the first CREATE ROLE authenticates).
 "$PGBIN/pg_ctl" -D "$P1" -l "$ROOT/n1.log" start >/dev/null
 "$PGBIN/psql" -h 127.0.0.1 -p "$PGP1" -U postgres -d postgres -v ON_ERROR_STOP=1 >/dev/null <<SQL
-CREATE ROLE replicator WITH REPLICATION LOGIN;
+CREATE ROLE replicator WITH REPLICATION LOGIN PASSWORD '$REPL_PW';
+GRANT pg_monitor TO replicator;
+GRANT EXECUTE ON FUNCTION pg_catalog.pg_ls_dir(text, boolean, boolean) TO replicator;
+GRANT EXECUTE ON FUNCTION pg_catalog.pg_stat_file(text, boolean) TO replicator;
+GRANT EXECUTE ON FUNCTION pg_catalog.pg_read_binary_file(text) TO replicator;
+GRANT EXECUTE ON FUNCTION pg_catalog.pg_read_binary_file(text, bigint, bigint, boolean) TO replicator;
 CREATE EXTENSION pg_replica;
 CREATE TABLE demo (t text);
 SQL
@@ -76,13 +90,15 @@ for i in 2 3; do
   d="$ROOT/n$i"
   pgp=$((BASE_PGPORT + i - 1))
   raft=$((BASE_RAFT + i - 1))
-  "$PGBIN/pg_basebackup" -h 127.0.0.1 -p "$PGP1" -U replicator -D "$d" -R -X stream >/dev/null
+  PGPASSFILE="$PASSFILE" "$PGBIN/pg_basebackup" -h 127.0.0.1 -p "$PGP1" -U replicator -D "$d" -X stream >/dev/null
   cat >> "$d/postgresql.conf" <<EOF
 port = $pgp
 cluster_name = 'node$i'
 pg_replica.node_id = $i
 pg_replica.raft_port = $raft
 EOF
+  echo "primary_conninfo = 'host=127.0.0.1 port=$PGP1 user=replicator passfile=$PASSFILE application_name=node$i'" >> "$d/postgresql.auto.conf"
+  touch "$d/standby.signal"
   "$PGBIN/pg_ctl" -D "$d" -l "$ROOT/n$i.log" start >/dev/null
   echo "node $i STANDBY up on 127.0.0.1:$pgp (streaming from 127.0.0.1:$PGP1)"
 done

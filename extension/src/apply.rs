@@ -22,6 +22,7 @@ pub fn spawn_rejoin(
     leader_host: &str,
     leader_port: &str,
     node_id: u64,
+    passfile: &str,
 ) -> bool {
     Command::new("setsid")
         .arg("bash")
@@ -31,6 +32,7 @@ pub fn spawn_rejoin(
         .arg(leader_host)
         .arg(leader_port)
         .arg(node_id.to_string())
+        .arg(passfile)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -77,7 +79,7 @@ pub fn peer_wal_lsn(psql: &str, host: &str, port: &str) -> Option<u64> {
         .args([
             "-h", host,
             "-p", port,
-            "-U", "postgres",
+            "-U", "replicator",
             "-d", "postgres",
             "-w",
             "-tAc",

@@ -6,7 +6,8 @@ R="${ROOT:-/tmp/hyperion-repl}"
 PROBE="${PROBE:-$HOME/probe-target/release/failover-probe}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 P1=54340 P2=54341 P3=54342
-CI="host=127.0.0.1,127.0.0.1,127.0.0.1 port=$P1,$P2,$P3 user=postgres dbname=postgres target_session_attrs=read-write connect_timeout=2"
+SU_PW="${SU_PW:-supass}"
+CI="host=127.0.0.1,127.0.0.1,127.0.0.1 port=$P1,$P2,$P3 user=postgres password=$SU_PW dbname=postgres target_session_attrs=read-write connect_timeout=2"
 
 q() { "$B/psql" -h 127.0.0.1 -p "$1" -U postgres -tAc "$2" 2>&1; }
 datadir_for() { echo "$R/n$(( $1 - P1 + 1 ))"; }

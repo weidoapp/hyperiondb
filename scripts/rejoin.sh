@@ -6,6 +6,11 @@ DATADIR="$2"
 LEADER_HOST="$3"
 LEADER_PORT="$4"
 NODE_ID="$5"
+PASSFILE="${6:-}"
+
+[ -n "$PASSFILE" ] && export PGPASSFILE="$PASSFILE"
+PASS_KW=""
+[ -n "$PASSFILE" ] && PASS_KW=" passfile=$PASSFILE"
 
 LOG="$(dirname "$DATADIR")/$(basename "$DATADIR").log"
 
@@ -20,7 +25,7 @@ cp "$DATADIR/postgresql.conf" "$CONF_SAVE"
 log "pg_rewind against leader $LEADER_HOST:$LEADER_PORT"
 if "$PGBIN/pg_rewind" \
   --target-pgdata="$DATADIR" \
-  --source-server="host=$LEADER_HOST port=$LEADER_PORT user=postgres dbname=postgres" \
+  --source-server="host=$LEADER_HOST port=$LEADER_PORT user=replicator dbname=postgres" \
   --progress >>"$LOG" 2>&1; then
   cp "$CONF_SAVE" "$DATADIR/postgresql.conf"
   log "pg_rewind succeeded"
@@ -38,7 +43,7 @@ else
 fi
 
 {
-  echo "primary_conninfo = 'host=$LEADER_HOST port=$LEADER_PORT user=replicator application_name=node$NODE_ID'"
+  echo "primary_conninfo = 'host=$LEADER_HOST port=$LEADER_PORT user=replicator${PASS_KW} application_name=node$NODE_ID'"
   echo "default_transaction_read_only = off"
 } >> "$DATADIR/postgresql.auto.conf"
 touch "$DATADIR/standby.signal"
