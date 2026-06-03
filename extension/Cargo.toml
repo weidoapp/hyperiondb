@@ -1,9 +1,14 @@
 [package]
 name = "pg_replica"
-version = "0.0.0"
+version = "0.1.0"
 edition = "2021"
-publish = false
+publish = true
 description = "Consensus-driven failover for PostgreSQL (Raft control plane)"
+license = "GPL-3.0-or-later"
+repository = "https://github.com/hyperiondb"
+readme = "README.md"
+keywords = ["postgresql", "raft", "failover", "replication", "pgrx"]
+categories = ["database"]
 
 [lib]
 crate-type = ["cdylib", "lib"]
