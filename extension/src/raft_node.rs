@@ -1,15 +1,16 @@
+use crate::storage::DiskStorage;
 use protobuf::Message as _;
 use raft::prelude::*;
-use raft::storage::MemStorage;
 use raft::StateRole;
+use std::path::PathBuf;
 
 pub struct Node {
-    raw: RawNode<MemStorage>,
+    raw: RawNode<DiskStorage>,
 }
 
 impl Node {
-    pub fn new(node_id: u64, voters: Vec<u64>) -> Self {
-        let storage = MemStorage::new_with_conf_state(ConfState::from((voters, vec![])));
+    pub fn new(node_id: u64, voters: Vec<u64>, raft_dir: PathBuf) -> (Self, bool) {
+        let (storage, recovered) = DiskStorage::new(node_id, voters, raft_dir);
         let cfg = Config {
             id: node_id,
             election_tick: 10,
@@ -17,11 +18,13 @@ impl Node {
             max_size_per_msg: 1024 * 1024 * 1024,
             max_inflight_msgs: 256,
             applied: 0,
+            pre_vote: true,
+            check_quorum: true,
             ..Default::default()
         };
         let logger = slog::Logger::root(slog::Discard, slog::o!());
         let raw = RawNode::new(&cfg, storage, &logger).expect("raft init failed");
-        Node { raw }
+        (Node { raw }, recovered)
     }
 
     pub fn tick(&mut self) {
@@ -35,9 +38,18 @@ impl Node {
         }
     }
 
-    pub fn drain_ready<F: FnMut(u64, Vec<u8>)>(&mut self, mut send: F) {
+    pub fn is_leader(&self) -> bool {
+        matches!(self.raw.raft.state, StateRole::Leader)
+    }
+
+    pub fn propose(&mut self, data: Vec<u8>) -> bool {
+        self.raw.propose(vec![], data).is_ok()
+    }
+
+    pub fn drain_ready<F: FnMut(u64, Vec<u8>)>(&mut self, mut send: F) -> Vec<Vec<u8>> {
+        let mut committed = Vec::new();
         if !self.raw.has_ready() {
-            return;
+            return committed;
         }
         let store = self.raw.raft.raft_log.store.clone();
         let mut ready = self.raw.ready();
@@ -46,14 +58,14 @@ impl Node {
             emit(ready.take_messages(), &mut send);
         }
         if !ready.snapshot().is_empty() {
-            let _ = store.wl().apply_snapshot(ready.snapshot().clone());
+            store.apply_snapshot(ready.snapshot().clone());
         }
-        let _ = ready.take_committed_entries();
+        collect_committed(ready.take_committed_entries(), &mut committed);
         if !ready.entries().is_empty() {
-            let _ = store.wl().append(ready.entries());
+            store.append(ready.entries());
         }
         if let Some(hs) = ready.hs() {
-            store.wl().set_hardstate(hs.clone());
+            store.set_hardstate(hs.clone());
         }
         if !ready.persisted_messages().is_empty() {
             emit(ready.take_persisted_messages(), &mut send);
@@ -61,11 +73,12 @@ impl Node {
 
         let mut light_rd = self.raw.advance(ready);
         if let Some(commit) = light_rd.commit_index() {
-            store.wl().mut_hard_state().set_commit(commit);
+            store.set_commit(commit);
         }
         emit(light_rd.take_messages(), &mut send);
-        let _ = light_rd.take_committed_entries();
+        collect_committed(light_rd.take_committed_entries(), &mut committed);
         self.raw.advance_apply();
+        committed
     }
 
     pub fn role_name(&self) -> &'static str {
@@ -91,6 +104,17 @@ fn emit<F: FnMut(u64, Vec<u8>)>(messages: Vec<Message>, send: &mut F) {
         let to = msg.to;
         if let Ok(bytes) = msg.write_to_bytes() {
             send(to, bytes);
+        }
+    }
+}
+
+fn collect_committed(entries: Vec<Entry>, out: &mut Vec<Vec<u8>>) {
+    for entry in entries {
+        if entry.get_entry_type() == EntryType::EntryNormal {
+            let data = entry.get_data();
+            if !data.is_empty() {
+                out.push(data.to_vec());
+            }
         }
     }
 }

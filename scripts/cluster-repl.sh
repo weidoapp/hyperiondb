@@ -32,6 +32,7 @@ stop_all
 rm -rf "$ROOT"
 mkdir -p "$ROOT"
 rm -f /tmp/pg_replica_*.state
+rm -f /tmp/pg_replica_raft_*.bin
 
 P1="$ROOT/n1"
 PGP1=$BASE_PGPORT

@@ -103,19 +103,6 @@ shipped as a plain Postgres extension. Closest existing thing is Patroni's
 
 ---
 
-## Do you actually need this?
-
-Straight talk before you build a distributed system: **if your Postgres is a
-derived, rebuildable cache (e.g. a search index sourced from another database),
-you probably don't need HA at all** — rebuild beats replicate, and a shared
-static role per node is simpler than everything here.
-
-Build `pg_replica` when Postgres is a **system of record** that must survive node
-loss with **no manual ops**, *and* you refuse to run etcd/Consul/Kubernetes. If
-either of those isn't true, use the simpler option (rebuild, or Patroni/pg_auto_failover).
-
----
-
 ## Status
 
 **Design / planning.** No code yet. Start with:

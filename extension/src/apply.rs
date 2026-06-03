@@ -37,6 +37,19 @@ pub fn spawn_rejoin(
         .is_ok()
 }
 
+pub fn wal_lsn(psql: &str, host: &str, port: &str, in_recovery: bool) -> u64 {
+    let sql = if in_recovery {
+        "SELECT pg_wal_lsn_diff(COALESCE(pg_last_wal_receive_lsn(), '0/0'), '0/0')::bigint"
+    } else {
+        "SELECT pg_wal_lsn_diff(pg_current_wal_lsn(), '0/0')::bigint"
+    };
+    run_sql(psql, host, port, sql)
+        .ok()
+        .and_then(|value| value.trim().parse::<i64>().ok())
+        .map(|value| value.max(0) as u64)
+        .unwrap_or(0)
+}
+
 pub fn run_sql(psql: &str, host: &str, port: &str, sql: &str) -> Result<String, String> {
     let output = Command::new(psql)
         .args([

@@ -7,6 +7,7 @@ pub static PEERS: GucSetting<Option<CString>> = GucSetting::<Option<CString>>::n
 pub static PG_ADDRS: GucSetting<Option<CString>> = GucSetting::<Option<CString>>::new(None);
 pub static PSQL: GucSetting<Option<CString>> = GucSetting::<Option<CString>>::new(None);
 pub static REJOIN_SCRIPT: GucSetting<Option<CString>> = GucSetting::<Option<CString>>::new(None);
+pub static RAFT_DIR: GucSetting<Option<CString>> = GucSetting::<Option<CString>>::new(None);
 
 pub fn init() {
     GucRegistry::define_int_guc(
@@ -66,6 +67,15 @@ pub fn init() {
         GucContext::Postmaster,
         GucFlags::default(),
     );
+
+    GucRegistry::define_string_guc(
+        c"pg_replica.raft_dir",
+        c"Directory holding this node's durable Raft state (term/vote/log).",
+        c"Must be node-local and outside the Postgres data directory so base backups and pg_rewind never clone it. Empty defaults to /tmp.",
+        &RAFT_DIR,
+        GucContext::Postmaster,
+        GucFlags::default(),
+    );
 }
 
 pub fn node_id() -> i32 {
@@ -103,4 +113,12 @@ pub fn rejoin_script() -> String {
         .get()
         .map(|value| value.to_string_lossy().into_owned())
         .unwrap_or_default()
+}
+
+pub fn raft_dir() -> String {
+    RAFT_DIR
+        .get()
+        .map(|value| value.to_string_lossy().into_owned())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| String::from("/tmp"))
 }
