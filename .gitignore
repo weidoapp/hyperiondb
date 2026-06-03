@@ -6,4 +6,4 @@ Cargo.lock
 /data/
 *.log
 .DS_Store
-extension/target/
+packages/*/target/

@@ -51,36 +51,6 @@ W. connection pool: https://github.com/djc/bb8 / https://github.com/fboulnois/na
 psql "host=10.0.0.1,10.0.0.2,10.0.0.3 port=5432 user=app dbname=weido target_session_attrs=read-write"
 ```
 
-## Node.js / TypeScript
-
-Pure-JS `pg` (`new Pool({ host })`) is **single-host** — multi-host is still an open
-feature request (brianc/node-postgres#1470), so `host: 'a,b,c'` does NOT probe for the
-primary. Two ways to get primary-following:
-
-1. **`pg-native` (libpq bindings)** — `pg` over libpq, so the multi-host
-   `target_session_attrs=read-write` connection string works. Requires the `pg-native`
-   package. (Wiring/config to confirm when adopted.)
-
-2. **A probe helper over pure-JS `pg`** — open a `Client` to each host, run
-   `SHOW transaction_read_only`, keep the one returning `off`, and re-probe on error.
-   ~15 lines, no native build step. Sketch (untested, illustrative):
-
-   ```js
-   import pg from 'pg'
-   export async function primaryPool(hosts, opts) {
-     for (const host of hosts) {
-       const c = new pg.Client({ host, ...opts, connectionTimeoutMillis: 2000 })
-       try {
-         await c.connect()
-         const { rows } = await c.query('SHOW transaction_read_only')
-         if (rows[0].transaction_read_only === 'off') { await c.end(); return new pg.Pool({ host, ...opts }) }
-       } catch {}
-       await c.end().catch(() => {})
-     }
-     throw new Error('no read-write primary reachable')
-   }
-   ```
-
 ## Read scaling (optional)
 
 `target_session_attrs=read-only` (or `prefer-standby` on PG 14+) routes a connection to

@@ -57,7 +57,7 @@ rustc --version
 # test dependencies
 cargo install --locked cargo-pgrx --version 0.18.1
 cargo pgrx init
-cd extension
+cd packages/pg_replica
 cargo pgrx run pg18
 
 CREATE EXTENSION pg_replica;
@@ -102,7 +102,7 @@ Coverage (`scripts/test-*.sh`, each spins a real 3-node cluster):
   replica, rejoins the loser with `pg_rewind`.
 - Operable from SQL: `SELECT pg_replica.status();`, `pg_replica.failover()`, etc.
 
-**Non-goals (v1)**
+**Non-goals**
 - Sharding / horizontal write scale-out → that is Citus, a different axis.
 - Connection pooling / proxy → recommend HAProxy or libpq multi-host
   (`target_session_attrs=read-write`). pg_replica only *publishes* who the primary is.
@@ -135,3 +135,4 @@ shipped as a plain Postgres extension. Closest existing thing is Patroni's
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — components, failover flow, fencing, the hard problems.
 - [docs/DECISIONS.md](docs/DECISIONS.md) — the load-bearing design choices and why.
 - [docs/TODO.md](docs/TODO.md) — phased milestones
+- [docs/CLIENT_TODO.md](docs/CLIENT_TODO.md) — phased milestones for nodejs addon

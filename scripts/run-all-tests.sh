@@ -16,11 +16,11 @@ TESTS=(test-m3-lsn test-m4-fence test-m4-watchdog test-m4-partition
 
 if [ "${1:-}" != "--no-build" ]; then
   echo "== building + installing extension =="
-  ( cd "$ROOT_DIR/extension" && CARGO_TARGET_DIR="$CARGO_TARGET_DIR_EXT" cargo pgrx install --release --pg-config "$PGCFG" ) \
+  ( cd "$ROOT_DIR/packages/pg_replica" && CARGO_TARGET_DIR="$CARGO_TARGET_DIR_EXT" cargo pgrx install --release --pg-config "$PGCFG" ) \
     >/tmp/pgr-build.log 2>&1 || { echo "extension build FAILED (see /tmp/pgr-build.log)"; tail -20 /tmp/pgr-build.log; exit 1; }
   echo "== building test clients (tokio-postgres) =="
-  ( cd "$ROOT_DIR/clients/failover-probe" && CARGO_TARGET_DIR="$PROBE_TARGET" cargo build --release ) >/tmp/pgr-probe.log 2>&1 || { echo "probe build FAILED"; tail -20 /tmp/pgr-probe.log; exit 1; }
-  ( cd "$ROOT_DIR/clients/chaos-writer"  && CARGO_TARGET_DIR="$PROBE_TARGET" cargo build --release ) >/tmp/pgr-writer.log 2>&1 || { echo "writer build FAILED"; tail -20 /tmp/pgr-writer.log; exit 1; }
+  ( cd "$ROOT_DIR/packages/failover-probe" && CARGO_TARGET_DIR="$PROBE_TARGET" cargo build --release ) >/tmp/pgr-probe.log 2>&1 || { echo "probe build FAILED"; tail -20 /tmp/pgr-probe.log; exit 1; }
+  ( cd "$ROOT_DIR/packages/chaos-writer"  && CARGO_TARGET_DIR="$PROBE_TARGET" cargo build --release ) >/tmp/pgr-writer.log 2>&1 || { echo "writer build FAILED"; tail -20 /tmp/pgr-writer.log; exit 1; }
 fi
 
 pass=0; other=0
