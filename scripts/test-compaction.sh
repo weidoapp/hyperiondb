@@ -10,7 +10,8 @@ P1=54340 P2=54341 P3=54342
 q() { "$B/psql" -h 127.0.0.1 -p "$1" -U postgres -tAc "$2" 2>&1; }
 ins() { "$B/psql" -h 127.0.0.1 -p "$1" -U postgres -tAc "INSERT INTO demo VALUES (\$t\$$2\$t\$)" 2>&1; }
 seq_of() { q "$1" "SELECT replica.status()" | grep -oE "seq=[0-9]+" | head -1 | cut -d= -f2; }
-fsize() { stat -c %s "/tmp/pg_replica_raft_$1.bin" 2>/dev/null || echo 0; }
+fsize() { stat -c %s "/tmp/raft_log_$1.json" 2>/dev/null || echo 0; }
+nlog() { python3 -c "import json;print(len(json.load(open('/tmp/raft_log_$1.json')).get('log',{})))" 2>/dev/null || echo -1; }
 bgpid() { ps --ppid "$(head -1 "$R/n$1/postmaster.pid")" -o pid=,args= | grep -i "pg_replica supervisor" | awk '{print $1}' | head -1; }
 
 echo "=== bring up cluster (compact_threshold=$COMPACT_THRESHOLD) ==="
@@ -33,18 +34,18 @@ done
 sleep 2
 
 SEQ1=$(seq_of $P1); SZ1=$(fsize 1); SZ2=$(fsize 2); SZ3=$(fsize 3)
+NLOG1=$(nlog 1)
 echo "  after pumping: seq=$SEQ1"
-echo "  raft file bytes: node1=$SZ1 node2=$SZ2 node3=$SZ3"
-echo "  compaction events logged: n1=$(grep -c 'compacted raft log' $R/n1.log) n2=$(grep -c 'compacted raft log' $R/n2.log) n3=$(grep -c 'compacted raft log' $R/n3.log)"
-echo "  sample: $(grep -h 'compacted raft log' $R/n1.log | tail -1)"
+echo "  raft log file bytes: node1=$SZ1 node2=$SZ2 node3=$SZ3"
+echo "  retained log entries (node1): $NLOG1 (openraft purges applied entries after each snapshot)"
 
 echo
 echo "=== restart node3 AFTER compaction -> must recover from snapshot (not full log) ==="
 $B/pg_ctl -D "$R/n3" -l "$R/n3.log" restart -m fast >/dev/null 2>&1
 for i in $(seq 1 40); do q "$P3" "SELECT 1" 2>/dev/null | grep -q 1 && break; sleep 0.5; done
 sleep 2
-echo "  $(grep -h 'raft storage recovered' $R/n3.log | tail -1)"
 N3SEQ=$(seq_of $P3)
+echo "  node3 restarted; seq after recovery = $N3SEQ (retained entries = $(nlog 3))"
 
 echo
 echo "=== cluster still healthy: write on primary replicates ==="
@@ -55,10 +56,9 @@ echo "  demo rows: node1=$D1 node3=$D3"
 
 echo
 echo "=== compaction result ==="
-GREW=$(( SZ1 - SZ0 )); DECS=$(( SEQ1 - SEQ0 ))
-COMPACTED=$(grep -c 'compacted raft log' $R/n1.log)
-if [ "$DECS" -ge 12 ] && [ "$COMPACTED" -ge 1 ] && [ "$SZ1" -lt 1200 ] && [ "$N3SEQ" -ge "$SEQ1" ] 2>/dev/null && [ "$D1" = "$D3" ]; then
-  echo "  PASS: $DECS decisions made, log compacted ${COMPACTED}x, raft file stayed bounded (${SZ1}B), node recovered from snapshot (seq=$N3SEQ), data consistent"
+DECS=$(( SEQ1 - SEQ0 ))
+if [ "$DECS" -ge 12 ] && [ "$NLOG1" -ge 0 ] && [ "$NLOG1" -lt "$DECS" ] && [ "$SZ1" -lt 8192 ] && [ "$N3SEQ" -ge "$SEQ1" ] 2>/dev/null && [ "$D1" = "$D3" ]; then
+  echo "  PASS: $DECS decisions made, raft log purged to $NLOG1 retained entries (< $DECS made), file stayed bounded (${SZ1}B), node3 recovered (seq=$N3SEQ), data consistent"
 else
-  echo "  CHECK: decisions=$DECS compactions=$COMPACTED file_bytes=$SZ1 (start $SZ0) n3_seq=$N3SEQ seq=$SEQ1 demo n1=$D1 n3=$D3"
+  echo "  CHECK: decisions=$DECS retained_entries=$NLOG1 file_bytes=$SZ1 (start $SZ0) n3_seq=$N3SEQ seq=$SEQ1 demo n1=$D1 n3=$D3"
 fi

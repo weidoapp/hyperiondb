@@ -7,9 +7,10 @@ mod apply;
 mod config;
 mod failover;
 mod raft_node;
+mod rpc;
+mod rtype;
 mod state;
-mod storage;
-mod transport;
+mod store;
 
 pgrx::pg_module_magic!();
 
@@ -43,7 +44,7 @@ pub extern "C-unwind" fn pg_replica_supervisor_main(_arg: pg_sys::Datum) {
 
     let node_id = config::node_id() as u64;
     let port = config::raft_port() as u16;
-    let peers = transport::parse_peers(&config::peers());
+    let peers = rpc::parse_peers(&config::peers());
     let voters: Vec<u64> = peers.iter().map(|peer| peer.id).collect();
 
     pgrx::log!(
@@ -59,15 +60,7 @@ pub extern "C-unwind" fn pg_replica_supervisor_main(_arg: pg_sys::Datum) {
         return;
     }
 
-    let net = match transport::Transport::start(node_id, port, &peers) {
-        Ok(net) => net,
-        Err(error) => {
-            pgrx::log!("pg_replica: transport bind failed on {}: {}", port, error);
-            return;
-        }
-    };
-
-    let pg_members = transport::parse_peers(&config::pg_addrs());
+    let pg_members = rpc::parse_peers(&config::pg_addrs());
     let psql = config::psql();
     let pgbin = apply::parent_dir(&psql);
     let rejoin_script = config::rejoin_script();
@@ -104,31 +97,30 @@ pub extern "C-unwind" fn pg_replica_supervisor_main(_arg: pg_sys::Datum) {
     }
 
     let compact_threshold = config::compact_threshold().max(1) as u64;
-    let (mut node, recovered) =
-        raft_node::Node::new(node_id, voters, std::path::PathBuf::from(&raft_dir));
-    let seeded = recovered
-        .decision
-        .as_deref()
-        .and_then(failover::decode_decision);
+    let raft_peers: Vec<(u64, String)> =
+        peers.iter().map(|peer| (peer.id, peer.addr.clone())).collect();
+    let handle =
+        match raft_node::RaftHandle::start(node_id, port, &raft_peers, &raft_dir, compact_threshold)
+        {
+            Ok(handle) => handle,
+            Err(error) => {
+                pgrx::log!("pg_replica: raft start failed on {}: {}", port, error);
+                return;
+            }
+        };
+    handle.bootstrap();
     pgrx::log!(
-        "pg_replica: node {} raft storage {}{}",
+        "pg_replica: node {} openraft started (raft_port={}, members={:?})",
         node_id,
-        if recovered.fresh {
-            "initialized fresh"
-        } else {
-            "recovered from disk"
-        },
-        match seeded {
-            Some(decision) => format!(" (seq={} primary={})", decision.seq, decision.primary),
-            None => String::new(),
-        }
+        port,
+        voters
     );
     let mut last = String::new();
     let mut peers_lsn: HashMap<u64, (u64, bool, Instant)> = HashMap::new();
     let mut last_heard: HashMap<u64, Instant> = HashMap::new();
     let mut peers_reconfirm: HashMap<u64, bool> = HashMap::new();
     let mut reconfirm_pending = false;
-    let mut decided: Option<failover::Decision> = seeded;
+    let mut decided: Option<failover::Decision> = handle.current_decision();
     let mut last_proposed: (u64, u64) = (0, 0);
     let mut promoted = false;
     let mut rejoining = false;
@@ -154,47 +146,21 @@ pub extern "C-unwind" fn pg_replica_supervisor_main(_arg: pg_sys::Datum) {
         last_loop = loop_now;
         apply::write_heartbeat(&heartbeat_file);
 
-        while let Some((from, payload)) = net.try_recv() {
+        while let Some((from, payload)) = handle.try_recv_gossip() {
             last_heard.insert(from, Instant::now());
-            if payload.is_empty() {
-                continue;
-            }
-            match payload[0] {
-                failover::KIND_RAFT => node.step_bytes(&payload[1..]),
-                failover::KIND_GOSSIP => {
-                    if let Some(gossip) = failover::decode_gossip(&payload[1..]) {
-                        peers_lsn.insert(from, (gossip.lsn, gossip.in_recovery, Instant::now()));
-                        peers_reconfirm.insert(from, gossip.reconfirm);
-                    }
-                }
-                _ => {}
+            if let Some(gossip) = failover::decode_gossip(&payload) {
+                peers_lsn.insert(from, (gossip.lsn, gossip.in_recovery, Instant::now()));
+                peers_reconfirm.insert(from, gossip.reconfirm);
             }
         }
 
-        node.tick();
-        let progress = node.drain_ready(|to, bytes| {
-            let mut framed = Vec::with_capacity(1 + bytes.len());
-            framed.push(failover::KIND_RAFT);
-            framed.extend_from_slice(&bytes);
-            net.send(to, framed);
-        });
-
-        let mut newest: Option<failover::Decision> = None;
-        for data in progress.snapshot.iter().chain(progress.committed.iter()) {
-            if let Some(decision) = failover::decode_decision(data) {
-                if newest.map_or(true, |current| decision.seq > current.seq) {
-                    newest = Some(decision);
-                }
-            }
-        }
-        if let Some(decision) = newest {
+        if let Some(decision) = handle.current_decision() {
             if decided.map_or(true, |current| decision.seq > current.seq) {
                 decided = Some(decision);
                 promoted = false;
                 rejoining = false;
                 applied_primary = 0;
                 reconfirm_pending = false;
-                node.set_snapshot_data(failover::encode_decision(decision));
                 pgrx::log!(
                     "pg_replica: node {} DECISION seq={} primary={}",
                     node_id,
@@ -204,10 +170,6 @@ pub extern "C-unwind" fn pg_replica_supervisor_main(_arg: pg_sys::Datum) {
             }
         }
 
-        if let Some(index) = node.maybe_compact(compact_threshold) {
-            pgrx::log!("pg_replica: node {} compacted raft log to index {}", node_id, index);
-        }
-
         let in_recovery = unsafe { pg_sys::RecoveryInProgress() };
 
         ticks += 1;
@@ -215,13 +177,10 @@ pub extern "C-unwind" fn pg_replica_supervisor_main(_arg: pg_sys::Datum) {
             let lsn = apply::wal_lsn(&psql, &my_host, &my_port, in_recovery);
             peers_lsn.insert(node_id, (lsn, in_recovery, Instant::now()));
             let payload = failover::encode_gossip(lsn, in_recovery, reconfirm_pending);
-            let mut framed = Vec::with_capacity(1 + payload.len());
-            framed.push(failover::KIND_GOSSIP);
-            framed.extend_from_slice(&payload);
-            net.broadcast(&framed);
+            handle.gossip_broadcast(node_id, &payload);
         }
 
-        if node.is_leader() {
+        if handle.is_leader() {
             let now = Instant::now();
             let live: Vec<(u64, u64, bool)> = peers_lsn
                 .iter()
@@ -276,7 +235,7 @@ pub extern "C-unwind" fn pg_replica_supervisor_main(_arg: pg_sys::Datum) {
                             seq,
                             primary: candidate,
                         };
-                        if node.propose(failover::encode_decision(decision)) {
+                        if handle.propose(decision) {
                             last_proposed = (seq, candidate);
                             pgrx::log!(
                                 "pg_replica: node {} PROPOSE seq={} primary={} live={:?}",
@@ -505,9 +464,9 @@ pub extern "C-unwind" fn pg_replica_supervisor_main(_arg: pg_sys::Datum) {
 
         let snapshot = format!(
             "{} term={} leader={} decided_primary={} seq={} quorum={} read_only={} reconfirm={} | repl={} in_recovery={}",
-            node.role_name(),
-            node.term(),
-            node.leader_id(),
+            handle.role_name(),
+            handle.term(),
+            handle.leader_id(),
             decided_primary,
             decided.map(|decision| decision.seq).unwrap_or(0),
             quorum_ok,
@@ -523,6 +482,7 @@ pub extern "C-unwind" fn pg_replica_supervisor_main(_arg: pg_sys::Datum) {
         }
     }
 
+    handle.shutdown();
     state::write(node_id, "stopped");
     pgrx::log!("pg_replica: supervisor shutting down");
 }

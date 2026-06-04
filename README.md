@@ -39,11 +39,13 @@ is replaced in seconds — with no human, no etcd, no Kubernetes.
 
 ## Performance (highly subjective numbers for 0.1.0)
 
+pgbench, 8 clients / 4 jobs, single-row INSERT on the primary, 10 s, async mode
+
 Memory
 
-- 6.9 MB RSS
-- ~1.3 MB PSS
-- 0.5 MB private
+- 8 MB RSS
+- 2 MB PSS
+- 0.8 MB private
 
 CPU
 
@@ -51,13 +53,13 @@ CPU
 
 Throughput
 
-- 1769 tps
-- 4.5 ms avg latency
+- 2494 tps
+- 3.2 ms avg latency
 - 17.6k rows
 
 Failover latency
 
-- 4687 ms to writable new primary
+- 5 s to writable new primary
 
 ## Test
 

@@ -21,6 +21,7 @@ stop_all() {
   for d in "$ROOT"/n*; do
     [ -d "$d" ] && "$PGBIN/pg_ctl" -D "$d" stop -m fast >/dev/null 2>&1 || true
   done
+  pkill -9 -f '[p]g_replica supervisor' >/dev/null 2>&1 || true
 }
 
 if [ "${1:-up}" = "down" ]; then
@@ -34,6 +35,7 @@ rm -rf "$ROOT"
 mkdir -p "$ROOT"
 rm -f /tmp/pg_replica_*.state
 rm -f /tmp/pg_replica_raft_*.bin
+rm -f /tmp/raft_log_*.json /tmp/raft_sm_*.json /tmp/raft_log_*.tmp /tmp/raft_sm_*.tmp
 rm -f /tmp/pg_replica_hb_* /tmp/pg_replica_wd_*.log
 
 REPL_PW="${REPL_PW:-replpass}"

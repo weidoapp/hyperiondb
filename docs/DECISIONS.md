@@ -66,7 +66,7 @@ watchdog timer that makes a stuck node refuse/relinquish leadership.
 
 ## D4 — Embedded Raft, no external DCS
 
-**Decision.** Embed Raft (`raft-rs`) inside the extension. No etcd, Consul, or k8s.
+**Decision.** Embed Raft (`openraft`) inside the extension. No etcd, Consul, or k8s.
 
 **Why.** The stated goal is fewer moving parts than CloudNativePG/Patroni-etcd.
 An embedded quorum removes an entire external system to deploy, secure, and
@@ -78,21 +78,17 @@ pg_auto_failover (the monitor is itself a SPOF and not a quorum).
 
 ---
 
-## D5 — Rust + pgrx + raft-rs
+## D5 — Rust + pgrx + openraft
 
 **Decision.** Implement in Rust: the extension via **pgrx**, consensus via
-**raft-rs** (TiKV's production Raft).
+**openraft** (async, event-driven Raft) hosted on a small embedded tokio runtime
+inside the background worker.
 
 **Why.** "Light on resources" rules out the JVM and argues against a Go control
 plane; Rust gives a small static `.so` with no GC pauses in the failover path.
 pgrx keeps us in the same toolchain as the ParadeDB-style stack already in use.
-raft-rs is battle-tested (TiKV) and is *just* the consensus core (it leaves
-storage/transport to us — exactly what we want, since storage/transport are tiny
-here).
-
-**Rejected.** Go + hashicorp/raft or etcd/raft (mature, but Go runtime weight and
-a second toolchain) — kept as the fallback if pgrx + raft-rs integration proves
-painful. C-only (raw bgworker) — too much boilerplate for the Raft state machine.
+openraft leaves storage and transport to us (a single versioned `Decision` value
+plus a tiny TCP/JSON RPC — both trivial here).
 
 ---
 

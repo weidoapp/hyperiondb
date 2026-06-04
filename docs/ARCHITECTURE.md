@@ -47,8 +47,9 @@ the same toolchain as ParadeDB-style extensions. Two parts:
 
 1. **Background worker `pg_replica supervisor`** — registered via
    `RegisterBackgroundWorker` at `shared_preload_libraries`. Hosts:
-   - the **Raft node** (`raft-rs`, the TiKV Raft library) + a small peer
-     transport (TCP, length-prefixed protobuf/bincode);
+   - the **Raft node** ([`openraft`](https://github.com/databendlabs/openraft), an
+     async Raft) on a small embedded tokio runtime, with a peer transport
+     (TCP, length-prefixed JSON RPC) that also multiplexes LSN gossip;
    - a durable **Raft log + snapshot store** in `$PGDATA/pg_replica/` (separate
      from Postgres WAL);
    - the **health monitor** (heartbeats + libpq `SELECT 1` probes of peers);
@@ -124,7 +125,7 @@ Configurable via `pg_replica.synchronous`:
 | **Raft node dies with Postgres** | Fine: a down node doesn't need to vote; survivors keep quorum. OS supervisor restarts Postgres → bgworker rejoins. |
 | **Hung (not dead) Postgres** | Watchdog timer; if the bgworker can't make progress, it stops accepting the leader role. |
 | **Bootstrap / new replica** | `pg_basebackup` from the leader, register in Raft, stream. |
-| **Network partition flapping** | Election timeouts + leadership leases + pre-vote (raft-rs) to avoid term churn. |
+| **Network partition flapping** | Election timeouts + leader leases + openraft's pre-vote to avoid term churn. |
 
 ## 6. On-disk / network footprint
 

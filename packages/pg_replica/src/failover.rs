@@ -28,7 +28,7 @@ pub fn decode_gossip(bytes: &[u8]) -> Option<Gossip> {
     })
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Decision {
     pub seq: u64,
     pub primary: u64,
