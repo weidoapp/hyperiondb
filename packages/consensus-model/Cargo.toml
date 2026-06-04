@@ -1,0 +1,16 @@
+[package]
+name = "consensus-model"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[lib]
+name = "consensus_model"
+path = "src/lib.rs"
+
+[[bin]]
+name = "consensus-model"
+path = "src/main.rs"
+
+[dependencies]
+stateright = "0.30"

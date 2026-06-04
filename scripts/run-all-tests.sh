@@ -11,9 +11,9 @@ export PROBE_TARGET="${PROBE_TARGET:-$HOME/probe-target}"
 
 # Deterministic tests (each must PASS) + the chaos stress test (safety must hold;
 # durability is zero-loss for clean failovers, see note in test-chaos.sh).
-TESTS=(test-m3-lsn test-m4-fence test-m4-watchdog test-m4-partition
+TESTS=(test-model test-m3-lsn test-m4-fence test-m4-watchdog test-m4-partition
        test-m5-rejoin test-m5-walgone test-compaction test-m6-routing test-m7-sync
-       test-perf test-chaos)
+       test-quorum-consistency test-perf test-chaos)
 
 if [ "${1:-}" != "--no-build" ]; then
   echo "== building + installing extension =="

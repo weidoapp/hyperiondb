@@ -15,7 +15,7 @@
 
 ## Validation targets
 
-- 3 node cluster tolerates 1 node loss with automatic failover with 0 messages lost.
+- Raft consensus node loss acceptance with automatic failover with 0 messages lost.
 - Quorum-sync mode: **zero** committed-transaction loss across induced failovers.
 - A newly created role/DDL on the primary is present on a freshly promoted node.
 - Resident memory overhead of the bgworker: single-digit MB beyond Postgres.

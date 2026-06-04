@@ -99,6 +99,7 @@ Coverage (`scripts/test-*.sh`, each spins a real 3-node cluster):
 
 | Test | Proves |
 |------|--------|
+| `test-model` | **formal model check** (stateright, exhaustive, N=3 and N=5): **(1) durability** — the sync-quorum math (`ack = majority`) loses **no acked transaction** across every reachable crash/failover interleaving; **(2) split-brain** — a **resurrected stale-term primary** can never commit a conflicting write (a commit needs a majority still at the leader's term). Both have negative controls that produce counterexamples |
 | `test-m3-lsn` | failover promotes the **highest-LSN** survivor (no data loss) |
 | `test-m4-fence` | minority primary **self-demotes** read-only (no split-brain) |
 | `test-m4-watchdog` | a **hung** control plane is fenced by the deadman watchdog |
@@ -108,6 +109,7 @@ Coverage (`scripts/test-*.sh`, each spins a real 3-node cluster):
 | `test-compaction` | Raft log stays **bounded** via snapshotting |
 | `test-m6-routing` | a multi-host client **follows the failover** with only a reconnect |
 | `test-m7-sync` | quorum-sync = **zero committed-transaction loss** on failover |
+| `test-quorum-consistency` | the Postgres **sync quorum** (`synchronous_standby_names`) and the **Raft consensus quorum** name the same nodes, and a write confirmed by one standby is **promoted onto that standby** — no two-quorum drift on failover |
 | `test-perf` | supervisor **memory** (single-digit MB private overhead), **idle CPU**, write **throughput** (pgbench), and **failover latency** |
 | `test-chaos` | Jepsen-style: continuous writer under partitions / SIGSTOP / kill / clock-skew / slow-disk / rolling-restart — **0 split-brain**, converges, zero-loss for clean failovers |
 
