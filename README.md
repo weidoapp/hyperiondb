@@ -37,6 +37,28 @@ is replaced in seconds — with no human, no etcd, no Kubernetes.
 
 ---
 
+## Performance (highly subjective numbers for 0.1.0)
+
+Memory
+
+- 6.9 MB RSS
+- ~1.3 MB PSS
+- 0.5 MB private
+
+CPU
+
+- 0.38% idle
+
+Throughput
+
+- 1769 tps
+- 4.5 ms avg latency
+- 17.6k rows
+
+Failover latency
+
+- 4687 ms to writable new primary
+
 ## Test
 
 ```bash
@@ -86,6 +108,7 @@ Coverage (`scripts/test-*.sh`, each spins a real 3-node cluster):
 | `test-compaction` | Raft log stays **bounded** via snapshotting |
 | `test-m6-routing` | a multi-host client **follows the failover** with only a reconnect |
 | `test-m7-sync` | quorum-sync = **zero committed-transaction loss** on failover |
+| `test-perf` | supervisor **memory** (single-digit MB private overhead), **idle CPU**, write **throughput** (pgbench), and **failover latency** |
 | `test-chaos` | Jepsen-style: continuous writer under partitions / SIGSTOP / kill / clock-skew / slow-disk / rolling-restart — **0 split-brain**, converges, zero-loss for clean failovers |
 
 ---
