@@ -1,6 +1,3 @@
-pub const KIND_RAFT: u8 = 0;
-pub const KIND_GOSSIP: u8 = 1;
-
 pub struct Gossip {
     pub lsn: u64,
     pub in_recovery: bool,
@@ -32,27 +29,6 @@ pub fn decode_gossip(bytes: &[u8]) -> Option<Gossip> {
 pub struct Decision {
     pub seq: u64,
     pub primary: u64,
-}
-
-pub fn encode_decision(decision: Decision) -> Vec<u8> {
-    let mut buf = Vec::with_capacity(16);
-    buf.extend_from_slice(&decision.seq.to_be_bytes());
-    buf.extend_from_slice(&decision.primary.to_be_bytes());
-    buf
-}
-
-pub fn decode_decision(bytes: &[u8]) -> Option<Decision> {
-    if bytes.len() < 16 {
-        return None;
-    }
-    let mut seq = [0u8; 8];
-    let mut primary = [0u8; 8];
-    seq.copy_from_slice(&bytes[..8]);
-    primary.copy_from_slice(&bytes[8..16]);
-    Some(Decision {
-        seq: u64::from_be_bytes(seq),
-        primary: u64::from_be_bytes(primary),
-    })
 }
 
 pub fn choose_primary(candidates: &[(u64, u64, bool)]) -> Option<u64> {
