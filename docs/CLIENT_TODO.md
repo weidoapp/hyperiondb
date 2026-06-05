@@ -31,7 +31,7 @@ An already-open pooled connection to that node stays connected but can no longer
 So the pool needs a **checkout validation** that confirms the connection is still on a
 writable primary (`SHOW transaction_read_only` → `off`) and evicts it otherwise.
 
-## Public API (TS sketch, names TBD)
+## Public API
 
 ```ts
 import { createPool } from 'hyperiondb-client'
@@ -62,62 +62,99 @@ work (ParadeDB search) to standbys.
 
 ## Milestones
 
-### C0 — Scaffold
-- [ ] New crate under `packages/node-addon`: `Cargo.toml` (`napi`,
-      `napi-derive`, `tokio-postgres`, pool crate) + `package.json` + `@napi-rs/cli`.
-- [ ] `crate-type = ["cdylib"]`; one `#[napi]` hello export building to a `.node`.
-- [ ] `napi build` produces a loadable addon; `napi`-generated `index.d.ts`.
-
 ### C1 — Core pool
-- [ ] Reuse the `failover-probe` `Config` (multi-host, `target_session_attrs=read-write`,
+- [x] Reuse the `failover-probe` `Config` (multi-host, `target_session_attrs=read-write`,
       `connect_timeout`).
-- [ ] `createPool(opts)` → `#[napi]` class holding a `deadpool`/`bb8` pool.
-- [ ] `pool.query(sql, params)` async (`#[napi]` → JS Promise) returning rows as JS objects
+- [x] `createPool(opts)` → `#[napi]` class holding a `deadpool`/`bb8` pool.
+- [x] `pool.query(sql, params)` async (`#[napi]` → JS Promise) returning rows as JS objects
       keyed by column name.
-- [ ] `pool.end()` graceful drain.
+- [x] `pool.end()` graceful drain.
 
 ### C2 — Type marshalling
-- [ ] Results: PG `Row` → JS. Decide mappings for `int2/4/8`, `float4/8`, `bool`, `text`,
-      `json`/`jsonb`, `uuid`, `bytea`, `timestamptz`, arrays.
-- [ ] Params: JS values → `tokio_postgres::types::ToSql`.
-- [ ] **Decision:** `numeric` and `int8`/`bigint` → string vs `BigInt` vs `number`
-      (fidelity vs ergonomics).
+- [x] Results: PG `Row` → JS. Mappings: `bool`→boolean, `int2/4`→number, `int8`→**BigInt**,
+      `oid`→number, `float4/8`→number, `numeric`→**string**, `text`/`varchar`/`bpchar`/`name`→
+      string, `uuid`→string, `bytea`→**Buffer**, `json`/`jsonb`→parsed value,
+      `timestamptz`/`timestamp`/`date`/`time`→**ISO 8601 string**, and arrays of all the above
+      → JS arrays. Custom binary `numeric`→string decoder (arbitrary precision, no float).
+- [x] Params: JS values → `tokio_postgres::types::ToSql` (null, boolean, number, **BigInt**,
+      string, **Buffer**→bytea, **Date**→timestamptz, array→pg array when the column is an
+      array type else jsonb, object→jsonb). Integer/float targets coerced by column type.
+- [x] **Decision:** `int8`/`bigint` → **BigInt** (lossless 64-bit); `numeric` → **string**
+      (arbitrary precision). `timestamptz` → ISO 8601 string; `bytea` → Buffer.
 
 ### C3 — Primary affinity & failover
-- [ ] Checkout validation: evict connections where `transaction_read_only != off`
-      (handles the read-only-fence-without-disconnect window).
-- [ ] Recycle on connection error; new connections re-resolve the primary.
-- [ ] Retry/backoff policy + surfacing "no writable primary" as a typed error.
-- [ ] `mode: 'read-only' | 'prefer-standby'` read pool variant.
+- [x] Checkout validation: a `deadpool` `pre_recycle` hook runs `SHOW transaction_read_only`
+      and evicts the connection when it is `on` (read-only-fence-without-disconnect window).
+      Write pool only; fresh connections are already validated by `target_session_attrs`.
+- [x] Recycle on connection error; new connections re-resolve the primary (the hook doubles
+      as a liveness check — a failed `SHOW` evicts the dead connection).
+- [x] Retry/backoff (50ms→500ms, capped) bounded by `acquireTimeoutMs` (default 5000),
+      surfacing `no writable primary available after <ms>ms` as a typed error.
+- [x] `mode: 'read-write' | 'read-only' | 'prefer-standby' | 'any'`. `read-only` →
+      `target_session_attrs=read-only` (lands on standbys); `prefer-standby`/`any` →
+      `target_session_attrs=any` + random host load-balancing. (tokio-postgres 0.7.x has no
+      server-side standby *preference*, so `prefer-standby` spreads across all reachable nodes.)
 
 ### C4 — Ergonomics
-- [ ] Transactions (checked-out client or `transaction(cb)` with auto BEGIN/COMMIT/ROLLBACK).
-- [ ] Prepared statements / pipelining.
-- [ ] Query cancellation (`AbortSignal` → `tokio_postgres` cancel token).
-- [ ] Error mapping: PG `SQLSTATE` → JS `Error` with `.code`.
-- [ ] Hand-checked `index.d.ts` over the napi-generated types.
+- [x] Transactions: native `pool.begin() -> Transaction {query, commit, rollback}` (one
+      dedicated connection held in an `Arc<Mutex<Option<Client>>>`), plus a `pool.transaction(cb)`
+      helper (auto `BEGIN`/`COMMIT`, `ROLLBACK` on throw) in the JS wrapper.
+- [x] Prepared statements: query paths use deadpool `prepare_cached`, so repeated SQL reuses
+      a server-side named statement per connection. (Pipelining is inherent to tokio-postgres
+      for concurrent queries on a connection.)
+- [x] Query cancellation: `query(sql, params, { timeoutMs, signal })`. Both a timeout and an
+      `AbortSignal` trip the connection's `tokio_postgres` `cancel_token` (server-side cancel).
+      The `!Send` `Rc`-based `AbortSignal` is bridged on the JS thread (`on_abort` → a `Send`
+      `Notify`) so the async query can `select!` on it.
+- [x] Error mapping: PG errors carry the 5-char `SQLSTATE` on JS `err.code` (native formats
+      `[SQLSTATE xxxxx] msg`; the JS wrapper parses it onto `.code` and cleans the message).
+- [x] Hand-checked `client.d.ts` (precise `PoolOptions`/`Param`/`Row`/`QueryOptions`/`Pool`/
+      `Transaction` types) is the published `types`; the napi-generated `index.d.ts` stays as
+      the internal native binding. Architecture is now native core (`index.js`/`.node`) + a thin
+      JS ergonomic layer (`client.js`) that adds `.code`, `transaction(cb)`, and option passing.
 
 ### C5 — Observability & resilience
-- [ ] Pool metrics: size, idle, in-use, waiters.
-- [ ] `statement_timeout` / per-query timeout.
-- [ ] Optional logging/tracing hook.
+- [x] Pool metrics: `pool.status()` → `{ maxSize, size, available, inUse, waiting }` (from
+      deadpool's `Status`; `inUse = size − available`).
+- [x] `statement_timeout`: `statementTimeoutMs` pool option sets it server-side on every
+      connection (`options=-c statement_timeout=…`). Per-query cancellation is the C4
+      `query(…, { timeoutMs, signal })` path (client-side `cancel_token`).
+- [x] Optional logging hook: `logger(event)` pool option, called once per query with
+      `{ sql, durationMs, rowCount? , error? }`; thrown logger errors are swallowed.
 
 ### C6 — Packaging & release
-- [ ] `@napi-rs/cli` prebuilds: `win32`/`darwin`/`linux` × `x64`/`arm64` (+ `linux-musl`).
-- [ ] GitHub Actions matrix → per-platform `@scope/name-<triple>` optional deps.
-- [ ] npm publish + version pinned to the addon's `Cargo.toml` version.
-- [ ] README: install, connect, failover behavior, read-scaling.
+- [x] `@napi-rs/cli` prebuilds: `win32-x64-msvc`, `darwin` x64/arm64, `linux` x64/arm64
+      (`gnu` + `musl`) — 7 targets (`napi.targets`). Linux builds cross-compile with
+      `cargo-zigbuild` (`--cross-compile`); win/mac build natively.
+- [x] GitHub Actions matrix (`.github/workflows/release.yml`) → `napi prepublish` publishes
+      per-platform `hyperiondb-client-<triple>` packages and wires them as the main package's
+      `optionalDependencies`. Triggered by `[cd]` in the commit message on `main`.
+- [x] npm publish; the workflow bumps `npm version patch` and syncs `Cargo.toml` to match,
+      commits the bump back (no `[cd]`, so it doesn't re-trigger), then publishes. (Needs an
+      `NPM_TOKEN` secret.)
+- [x] README: install, connect, failover behavior, read-scaling, type mapping, testing.
 
 ## Testing
-- [ ] Unit: type round-trips (params ↔ rows) for each supported PG type.
-- [ ] Integration against the `docker/` 3-node cluster: query load, `docker compose stop`
-      the primary, assert reconnection and **zero failed committed writes** — a JS port of
-      `packages/chaos-writer`.
-- [ ] Validate the read-only-fence eviction path (C3) explicitly.
+
+`node-addon/test/` (`node:test`). `npm test` runs the type + fence tests against a running
+cluster (primary on the first host); `npm run test:chaos` runs the failover test, which needs
+to stop a node (`test/cluster.js`, defaults to the local pgrx cluster via WSL `pg_ctl`; set
+`HYPERION_CTL`/env for docker). Connection + topology come from `HYPERION_*` env vars.
+
+- [x] Unit: type round-trips (params ↔ rows) for every supported PG type — `test/types.test.js`
+      (scalars, `int8`→BigInt, `numeric` precision, NULLs, date/time/void, arrays incl `int8[]`,
+      Date/Buffer/array/jsonb params).
+- [x] Integration: query load through the primary-following pool, stop the primary, assert
+      reconnection to the new primary and **zero acked-write loss** — `test/chaos.test.js` (JS
+      port of `packages/chaos-writer`; requires synchronous replication for true zero-loss).
+- [x] Read-only-fence eviction (C3) explicitly — `test/fence.test.js` (fences the primary via
+      `ALTER SYSTEM`, asserts the typed error + recovery; always resets the fence in teardown).
 
 ## Open decisions
-- [ ] Pool crate: `deadpool-postgres` (simpler, recycling built in) vs `bb8-postgres`
-      (referenced in [CLIENT.md](CLIENT.md)). Lean `deadpool`.
-- [ ] Package + crate name (brand: HyperionDb).
-- [ ] `bigint`/`numeric` JS representation (C2).
+- [x] Pool crate: `deadpool-postgres` (simpler, recycling built in)
+- [x] Package + crate name (brand: HyperionDb).
+- [x] `bigint`/`numeric` JS representation (C2).
+
+## Not planned
+
 - [ ] TLS backend (rustls vs native-tls) and default per environment.
