@@ -1,7 +1,5 @@
 # TODO
 
-[] Nodejs addon
-[] UX friendly packaging
 [] slow-disk + kill at once/ chaos, edge ~0.05% loss remains. Fully closing it needs committed-LSN tracking in the Raft log (Patroni-style)
 
 ## Explicitly out of scope for open source

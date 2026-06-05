@@ -1,6 +1,6 @@
 # HyperionDb
 
-[![HyperionDb](media/header.jpg)](https://github.com/weidoapp/hyperiondb)
+[![HyperionDb](media/header.jpg)](https://github.com/hyperiondb/hyperiondb)
 
 A PostgreSQL extension that gives a small cluster of **vanilla Postgres** nodes
 **automatic, consensus-driven failover** — full-cluster replication (tables,
@@ -34,6 +34,31 @@ DCS.
 
 Result: roles, DDL, and data stay consistent on every node, and a dead primary
 is replaced in seconds — with no human, no etcd, no Kubernetes.
+
+---
+
+## Install
+
+On Debian/Ubuntu, add the apt repo and install the package for your PostgreSQL major:
+
+```bash
+curl -fsSL https://hyperiondb.github.io/hyperiondb/install.sh | sudo bash
+sudo apt-get install -y postgresql-18-pg-replica      # or -17 / -16 / -15 / -14
+```
+
+Enable it and create the extension:
+
+```bash
+sudo sed -i "s/^#\?shared_preload_libraries.*/shared_preload_libraries = 'pg_replica'/" \
+  /etc/postgresql/18/main/postgresql.conf
+sudo systemctl restart postgresql
+```
+
+```sql
+CREATE EXTENSION pg_replica;
+```
+
+Packaging internals and the one-time release setup live in [`packaging/`](packaging/README.md).
 
 ---
 
