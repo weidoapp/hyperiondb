@@ -17,7 +17,6 @@ if [ ! -x "$PG_CONFIG" ]; then
 fi
 
 cd "$CRATE_DIR"
-cargo pgrx init "--pg${PG_MAJOR}" "$PG_CONFIG"
 cargo pgrx package --no-default-features --features "pg${PG_MAJOR}" --pg-config "$PG_CONFIG"
 
 TARGET_DIR="$(cargo metadata --no-deps --format-version 1 \
