@@ -17,6 +17,7 @@ if [ ! -x "$PG_CONFIG" ]; then
 fi
 
 cd "$CRATE_DIR"
+export PGRX_PG_CONFIG_PATH="$PG_CONFIG"
 cargo pgrx package --no-default-features --features "pg${PG_MAJOR}" --pg-config "$PG_CONFIG"
 
 TARGET_DIR="$(cargo metadata --no-deps --format-version 1 \
