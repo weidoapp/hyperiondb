@@ -184,3 +184,4 @@ shipped as a plain Postgres extension. Closest existing thing is Patroni's
 - [docs/DURABILITY.md](docs/DURABILITY.md) — zero-loss configuration, failure modes, what backups still cover.
 - [docs/TODO.md](docs/TODO.md) — phased milestones
 - [docs/CLIENT_TODO.md](docs/CLIENT_TODO.md) — phased milestones for nodejs addon
+- [docs/DOCKER_CONFIG.md](docs/DOCKER_CONFIG.md) - Docker config (ParadeDb as example)
