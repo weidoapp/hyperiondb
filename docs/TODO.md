@@ -1,6 +1,6 @@
 # TODO
 
-[] ...
+[] OS problems (glibc, huge pages, etc.)
 
 ## Explicitly out of scope for open source
 
