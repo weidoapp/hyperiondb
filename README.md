@@ -1,6 +1,6 @@
 # HyperionDb
 
-[![HyperionDb](media/header.jpg)](https://github.com/hyperiondb/hyperiondb)
+[![HyperionDb](https://hyperiondb.eu/header.jpg)
 
 A PostgreSQL extension that gives a small cluster of **vanilla Postgres** nodes
 **automatic, consensus-driven failover** — full-cluster replication (tables,
