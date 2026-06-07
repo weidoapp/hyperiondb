@@ -1,28 +1,5 @@
 # Debian packaging & apt repo
 
-This builds `pg_replica` into per-PostgreSQL-major `.deb` packages and publishes a signed apt
-repository on GitHub Pages, so users install it the same way they install Citus.
-
-## End-user install
-
-```bash
-curl -fsSL https://hyperiondb.github.io/hyperiondb/install.sh | sudo bash
-sudo apt-get install -y postgresql-18-pg-replica      # or -17, -16, -15, -14
-
-# enable the extension
-sudo sed -i "s/^#\?shared_preload_libraries.*/shared_preload_libraries = 'pg_replica'/" \
-  /etc/postgresql/18/main/postgresql.conf
-sudo systemctl restart postgresql
-```
-
-```sql
-CREATE EXTENSION pg_replica;
-```
-
-Cluster configuration (raft port, peers, bootstrap) is separate — see the project README.
-
-## How it works
-
 - `build-deb.sh <pg-major>` — runs `cargo pgrx package` against the system
   `postgresql-server-dev-<major>`, then wraps the staged tree into
   `postgresql-<major>-pg-replica_<version>_<arch>.deb` with `dpkg-deb`.
@@ -64,11 +41,3 @@ sudo apt-get install -y ./dist/postgresql-18-pg-replica_*.deb
 ```
 
 `build-apt-repo.sh` additionally needs `dpkg-dev apt-utils gnupg` and a `GPG_KEY_ID` env var.
-
-## Notes
-
-- `ubuntu-24.04-arm` runners build the arm64 packages; if your account has no arm runners (or
-  PGDG lacks arm64 for a release), drop the `arm64` entry from the matrix.
-- The repo suite is `stable`; bump `DIST` in the scripts/installer to stage pre-releases.
-- The package depends on `postgresql-<major>` from PGDG (`apt.postgresql.org`); users who run
-  distro PostgreSQL already satisfy that.

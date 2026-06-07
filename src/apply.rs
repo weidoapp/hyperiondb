@@ -113,15 +113,23 @@ pub fn wal_lsn(psql: &str, host: &str, port: &str, in_recovery: bool) -> u64 {
 }
 
 pub fn run_sql(psql: &str, host: &str, port: &str, sql: &str) -> Result<String, String> {
-    let output = Command::new(psql)
-        .args([
-            "-h", host,
-            "-p", port,
-            "-U", "postgres",
-            "-d", "postgres",
-            "-v", "ON_ERROR_STOP=1",
-            "-tAc", sql,
-        ])
+    let user = crate::config::apply_user();
+    let db = crate::config::apply_db();
+    let passfile = crate::config::passfile();
+    let mut command = Command::new(psql);
+    command.args([
+        "-h", host,
+        "-p", port,
+        "-U", user.as_str(),
+        "-d", db.as_str(),
+        "-w",
+        "-v", "ON_ERROR_STOP=1",
+        "-tAc", sql,
+    ]);
+    if !passfile.is_empty() {
+        command.env("PGPASSFILE", &passfile);
+    }
+    let output = command
         .output()
         .map_err(|error| format!("spawn failed: {}", error))?;
 

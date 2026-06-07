@@ -12,6 +12,8 @@ pub static REJOIN_SCRIPT: GucSetting<Option<CString>> = GucSetting::<Option<CStr
 pub static WATCHDOG_SCRIPT: GucSetting<Option<CString>> = GucSetting::<Option<CString>>::new(None);
 pub static PASSFILE: GucSetting<Option<CString>> = GucSetting::<Option<CString>>::new(None);
 pub static RAFT_DIR: GucSetting<Option<CString>> = GucSetting::<Option<CString>>::new(None);
+pub static APPLY_USER: GucSetting<Option<CString>> = GucSetting::<Option<CString>>::new(None);
+pub static APPLY_DB: GucSetting<Option<CString>> = GucSetting::<Option<CString>>::new(None);
 
 pub fn init() {
     GucRegistry::define_bool_guc(
@@ -118,6 +120,24 @@ pub fn init() {
         GucContext::Postmaster,
         GucFlags::default(),
     );
+
+    GucRegistry::define_string_guc(
+        c"pg_replica.apply_user",
+        c"Superuser role psql connects as to apply promote/fence/repoint/reload actions on the local node.",
+        c"Needs a matching entry in pg_replica.passfile. Empty falls back to the POSTGRES_USER environment variable, then 'postgres'.",
+        &APPLY_USER,
+        GucContext::Postmaster,
+        GucFlags::default(),
+    );
+
+    GucRegistry::define_string_guc(
+        c"pg_replica.apply_db",
+        c"Database psql connects to when applying control-plane actions on the local node.",
+        c"Any database the apply_user can connect to; the SQL is cluster-global. Empty falls back to the POSTGRES_DB environment variable, then 'postgres'.",
+        &APPLY_DB,
+        GucContext::Postmaster,
+        GucFlags::default(),
+    );
 }
 
 pub fn node_id() -> i32 {
@@ -185,4 +205,24 @@ pub fn raft_dir() -> String {
         .map(|value| value.to_string_lossy().into_owned())
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| String::from("/tmp"))
+}
+
+pub fn apply_user() -> String {
+    APPLY_USER
+        .get()
+        .map(|value| value.to_string_lossy().into_owned())
+        .filter(|value| !value.is_empty())
+        .or_else(|| std::env::var("POSTGRES_USER").ok())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| String::from("postgres"))
+}
+
+pub fn apply_db() -> String {
+    APPLY_DB
+        .get()
+        .map(|value| value.to_string_lossy().into_owned())
+        .filter(|value| !value.is_empty())
+        .or_else(|| std::env::var("POSTGRES_DB").ok())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| String::from("postgres"))
 }

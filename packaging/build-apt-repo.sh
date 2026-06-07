@@ -36,4 +36,5 @@ done
 
 gpg --export "${GPG_KEY_ID}" > "${SITE}/pg_replica.gpg"
 cp "${ROOT}/packaging/install.sh" "${SITE}/install.sh"
+cp "${ROOT}/packaging/index.html" "${SITE}/index.html"
 echo "apt repo assembled in ${SITE}/"

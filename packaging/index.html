@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>pg_replica — apt repository</title>
+  <style>
+    body { font-family: system-ui, -apple-system, sans-serif; max-width: 46rem; margin: 3rem auto; padding: 0 1rem; line-height: 1.55; color: #1f2328; }
+    h1 { margin-bottom: .25rem; }
+    pre { background: #f6f8fa; padding: 1rem; overflow: auto; border-radius: 6px; }
+    code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+    a { color: #0969da; }
+    .muted { color: #59636e; }
+  </style>
+</head>
+<body>
+  <h1>pg_replica</h1>
+  <p class="muted">Consensus-driven failover for PostgreSQL (Raft control plane). This is its Debian/Ubuntu apt repository.</p>
+
+  <h2>Install</h2>
+  <pre><code>curl -fsSL https://hyperiondb.github.io/hyperiondb/install.sh | sudo bash
+sudo apt-get install -y postgresql-18-pg-replica      # or -17 / -16 / -15 / -14</code></pre>
+
+  <p>Then enable it:</p>
+  <pre><code>sudo sed -i "s/^#\?shared_preload_libraries.*/shared_preload_libraries = 'pg_replica'/" \
+  /etc/postgresql/18/main/postgresql.conf
+sudo systemctl restart postgresql</code></pre>
+  <pre><code>CREATE EXTENSION pg_replica;</code></pre>
+
+  <p class="muted">Source &amp; docs:
+    <a href="https://github.com/hyperiondb/hyperiondb">github.com/hyperiondb/hyperiondb</a></p>
+</body>
+</html>

@@ -14,7 +14,8 @@ RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --de
 ENV PATH="/root/.cargo/bin:${PATH}"
 RUN cargo install --locked cargo-pgrx --version 0.18.1
 WORKDIR /build
-COPY packages/pg_replica/ ./extension/
+COPY Cargo.toml pg_replica.control ./extension/
+COPY src/ ./extension/src/
 RUN set -eux; \
     PGVER="$(pg_config --version | grep -oE '[0-9]+' | head -1)"; \
     cd extension; \

@@ -12,6 +12,8 @@ Replaces Patroni, CloudNativePG, pgActive and many more.
 One job: keep a single leader elected and the data byte-identical across N nodes,
 and fail over automatically when the leader dies. Do that one job well.
 
+Status: **in production**
+
 ---
 
 ## The one idea
@@ -37,28 +39,22 @@ is replaced in seconds — with no human, no etcd, no Kubernetes.
 
 ---
 
-## Install
-
-On Debian/Ubuntu, add the apt repo and install the package for your PostgreSQL major:
+## End-user install
 
 ```bash
 curl -fsSL https://hyperiondb.github.io/hyperiondb/install.sh | sudo bash
-sudo apt-get install -y postgresql-18-pg-replica      # or -17 / -16 / -15 / -14
-```
+sudo apt-get install -y postgresql-18-pg-replica      # or -17, -16, -15, -14
 
-Enable it and create the extension:
-
-```bash
+# enable the extension
 sudo sed -i "s/^#\?shared_preload_libraries.*/shared_preload_libraries = 'pg_replica'/" \
   /etc/postgresql/18/main/postgresql.conf
 sudo systemctl restart postgresql
 ```
 
 ```sql
-CREATE EXTENSION pg_replica;
+CREATE EXTENSION IF NOT EXISTS pg_replica;
+CREATE ROLE replicator WITH REPLICATION LOGIN PASSWORD '<pass>'; // *same* password used for main user
 ```
-
-Packaging internals and the one-time release setup live in [`packaging/`](packaging/README.md).
 
 ---
 
@@ -106,7 +102,6 @@ rustc --version
 # test dependencies
 cargo install --locked cargo-pgrx --version 0.18.1
 cargo pgrx init
-cd packages/pg_replica
 cargo pgrx run pg18
 
 CREATE EXTENSION pg_replica;
@@ -186,5 +181,6 @@ shipped as a plain Postgres extension. Closest existing thing is Patroni's
 **Design / planning.** No code yet. Start with:
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — components, failover flow, fencing, the hard problems.
 - [docs/DECISIONS.md](docs/DECISIONS.md) — the load-bearing design choices and why.
+- [docs/DURABILITY.md](docs/DURABILITY.md) — zero-loss configuration, failure modes, what backups still cover.
 - [docs/TODO.md](docs/TODO.md) — phased milestones
 - [docs/CLIENT_TODO.md](docs/CLIENT_TODO.md) — phased milestones for nodejs addon

@@ -52,8 +52,6 @@ pg_replica.raft_port = $RAFT_PORT
 pg_replica.peers = '$PEERS'
 pg_replica.pg_addrs = '$PG_ADDRS'
 pg_replica.psql = '$PGBIN/psql'
-pg_replica.rejoin_script = '/opt/pg_replica/rejoin.sh'
-pg_replica.watchdog_script = '/opt/pg_replica/watchdog.sh'
 pg_replica.passfile = '$PASSFILE'
 pg_replica.synchronous = $SYNCHRONOUS
 EOF
