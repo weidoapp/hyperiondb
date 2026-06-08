@@ -1,7 +1,7 @@
 # TODO
 
-[] OS problems (glibc, huge pages, etc.)
 [] all configs via client only
+[] self contained tests
 
 ## Explicitly out of scope for open source
 

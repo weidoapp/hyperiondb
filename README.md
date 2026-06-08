@@ -195,6 +195,7 @@ shipped as a plain Postgres extension. Closest existing thing is Patroni's
 
 - If a standby ever runs a different glibc than the primary that built the btree indexes, the standby's text/varchar indexes are silently mis-ordered. The instant extension promotes that standby, index-using queries return missing/duplicate rows with nothing in the logs. Extensions's entire job is safe promotion; a glibc skew turns a clean failover into silent corruption
 - Extension rusn 100 ms tick, 250 ms heartbeats, 1000–2000 ms election window. A bad multi-hundred-ms (or >1 s) stall of THP on the primary's host can delay heartbeats/gossip enough that standbys mark it unhealthy and start an election - a spurious failover of a healthy primary.
+- Deadpool's RecyclingMethod::Fast doesn't re-route an existing connection — so a connection that fell back to the primary during a standby outage stays pinned there until it's recycled out of the pool. That's the same stickiness libpq's prefer-standby has; under normal operation (standbys present) every new connection lands on a standby.
 
 ---
 
