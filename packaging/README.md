@@ -10,7 +10,7 @@
 - `install.sh` — installs the public key to `/usr/share/keyrings/pg_replica.gpg` and adds a
   `signed-by` apt source pointing at the Pages URL.
 - `.github/workflows/packages.yml` — on a `[cd]` commit to `main` (or manual dispatch),
-  builds the matrix (PG 14–18 × amd64/arm64), assembles + signs the repo, and deploys it to
+  builds the matrix (PG 18 amd64/arm64), assembles + signs the repo, and deploys it to
   GitHub Pages.
 
 ## One-time repo setup

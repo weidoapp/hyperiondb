@@ -1,0 +1,54 @@
+{
+   "name": "pg_replica",
+   "abstract": "Consensus-driven automatic failover for PostgreSQL (embedded Raft control plane)",
+   "description": "pg_replica gives a small cluster of vanilla PostgreSQL nodes automatic, consensus-driven failover. An embedded Raft quorum running inside a background worker keeps a single leader elected, fences the old primary, promotes the highest-LSN survivor, and rejoins the loser with pg_rewind, with no external coordination service (no etcd, Consul, or Kubernetes). Tables, indexes, roles, GRANTs, DDL, and extensions replicate byte-for-byte over PostgreSQL physical streaming replication.",
+   "version": "0.4.0",
+   "maintainer": [
+      "Tadas Talaikis <talaikis.tadas@gmail.com>"
+   ],
+   "license": "gpl_3",
+   "provides": {
+      "pg_replica": {
+         "abstract": "Consensus-driven automatic failover for PostgreSQL",
+         "file": "pg_replica.control",
+         "version": "0.4.0"
+      }
+   },
+   "prereqs": {
+      "runtime": {
+         "requires": {
+            "PostgreSQL": "18.0.0"
+         }
+      },
+      "build": {
+         "requires": {
+            "cargo-pgrx": "0.18.1"
+         }
+      }
+   },
+   "resources": {
+      "homepage": "https://hyperiondb.eu",
+      "bugtracker": {
+         "web": "https://github.com/hyperiondb/hyperiondb/issues"
+      },
+      "repository": {
+         "url": "https://github.com/hyperiondb/hyperiondb.git",
+         "web": "https://github.com/hyperiondb/hyperiondb",
+         "type": "git"
+      }
+   },
+   "generated_by": "Tadas Talaikis",
+   "meta-spec": {
+      "version": "1.0.0",
+      "url": "https://pgxn.org/meta/spec.txt"
+   },
+   "tags": [
+      "replication",
+      "failover",
+      "raft",
+      "high availability",
+      "consensus",
+      "streaming replication"
+   ],
+   "release_status": "stable"
+}

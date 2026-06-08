@@ -59,7 +59,7 @@ is replaced in seconds — with no human, no etcd, no Kubernetes.
 
 ```bash
 curl -fsSL https://hyperiondb.github.io/hyperiondb/install.sh | sudo bash
-sudo apt-get install -y postgresql-18-pg-replica      # or -17, -16, -15, -14
+sudo apt-get install -y postgresql-18-pg-replica
 
 # enable the extension
 sudo sed -i "s/^#\?shared_preload_libraries.*/shared_preload_libraries = 'pg_replica'/" \
