@@ -34,8 +34,7 @@ DCS.
 | **Leadership & failover** | Embedded Raft, running inside a Postgres background worker |
 | **Process lifecycle** (start/restart Postgres) | Your existing supervisor — systemd or Docker restart policy |
 
-Result: roles, DDL, and data stay consistent on every node, and a dead primary
-is replaced in seconds — with no human, no etcd, no Kubernetes.
+Result: roles, DDL, and data stay consistent on every node, and a dead primary is replaced in seconds — with no human, no etcd, no Kubernetes.
 
 ---
 
