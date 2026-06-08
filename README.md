@@ -39,6 +39,22 @@ is replaced in seconds — with no human, no etcd, no Kubernetes.
 
 ---
 
+## Features
+
+- **Automatic, consensus-driven failover** — an embedded Raft quorum keeps a single leader elected and promotes a new primary in seconds when it dies. No etcd, no Consul, no Kubernetes, no external DCS.
+- **Full-cluster fidelity, for free** — tables, indexes, roles + SCRAM verifiers, GRANTs, DDL, and extensions all replicate byte-for-byte over Postgres physical (WAL) streaming replication. Standbys are exact copies, not logical subsets.
+- **Safe by default** — quorum-gated promotion fences the old primary, picks the **highest-LSN** survivor (no acked-write loss), and self-demotes a minority or network-partitioned primary read-only (no split-brain).
+- **Deadman watchdog** — a control plane that is alive but hung is fenced, not trusted.
+- **Automatic re-join** — a deposed primary `pg_rewind`-rejoins as a standby; if its WAL is already gone, it falls back to a full `pg_basebackup` re-clone.
+- **Zero committed-transaction loss** (opt-in) — quorum-sync ties the Postgres sync quorum (`synchronous_standby_names`) to the Raft consensus quorum, so an acked write is always present on the node that gets promoted.
+- **Crash-safe consensus storage** — the Raft log, vote, and state machine are persisted with atomic write + `fsync` of both the file data **and** the containing directory, so an entry acknowledged as durable survives power loss.
+- **Bounded on-disk footprint** — the Raft log is compacted via snapshotting; it does not grow without limit.
+- **Operable from SQL** — `SELECT pg_replica.status();`, `pg_replica.failover()`, and friends. No sidecar agent or CLI required.
+- **Client follows the failover** — a multi-host libpq / Node client (`target_session_attrs=read-write`) re-resolves the new primary on reconnect; the extension only *publishes* who the primary is.
+- **Lightweight** — one `.so` plus Postgres: single-digit-MB private memory, sub-percent idle CPU, ~5 s to a writable new primary.
+
+---
+
 ## End-user install
 
 ```bash
@@ -176,12 +192,24 @@ shipped as a plain Postgres extension. Closest existing thing is Patroni's
 
 ---
 
-## Status
+## Gotchas (sic!)
 
-**Design / planning.** No code yet. Start with:
+- If a standby ever runs a different glibc than the primary that built the btree indexes, the standby's text/varchar indexes are silently mis-ordered. The instant extension promotes that standby, index-using queries return missing/duplicate rows with nothing in the logs. Extensions's entire job is safe promotion; a glibc skew turns a clean failover into silent corruption
+- Extension rusn 100 ms tick, 250 ms heartbeats, 1000–2000 ms election window. A bad multi-hundred-ms (or >1 s) stall of THP on the primary's host can delay heartbeats/gossip enough that standbys mark it unhealthy and start an election - a spurious failover of a healthy primary.
+
+---
+
+## Docs
+
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — components, failover flow, fencing, the hard problems.
 - [docs/DECISIONS.md](docs/DECISIONS.md) — the load-bearing design choices and why.
 - [docs/DURABILITY.md](docs/DURABILITY.md) — zero-loss configuration, failure modes, what backups still cover.
 - [docs/TODO.md](docs/TODO.md) — phased milestones
 - [docs/CLIENT_TODO.md](docs/CLIENT_TODO.md) — phased milestones for nodejs addon
 - [docs/DOCKER_CONFIG.md](docs/DOCKER_CONFIG.md) - Docker config (ParadeDb as example)
+
+---
+
+## Listed in
+
+- [https://crates.io/crates/pg_replica](crates.io)

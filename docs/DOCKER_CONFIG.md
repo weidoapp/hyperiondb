@@ -9,6 +9,7 @@ FROM postgres:18-trixie
 
 ARG PGR_VERSION=0.3.0
 ARG PG_SEARCH_VERSION=0.24.0
+ARG WALG_VERSION=v3.0.8
 
 RUN set -eux; \
     apt-get update; \
@@ -18,6 +19,14 @@ RUN set -eux; \
     curl -fsSL "https://hyperiondb.github.io/hyperiondb/pool/main/postgresql-18-pg-replica_${PGR_VERSION}_${arch}.deb" -o /tmp/pg_replica.deb; \
     apt-get install -y /tmp/pg_search.deb /tmp/pg_replica.deb; \
     rm -f /tmp/pg_search.deb /tmp/pg_replica.deb; \
+    case "$arch" in \
+      amd64) wgarch=amd64 ;; \
+      arm64) wgarch=aarch64 ;; \
+      *) echo "unsupported arch: $arch" >&2; exit 1 ;; \
+    esac; \
+    curl -fsSL "https://github.com/wal-g/wal-g/releases/download/${WALG_VERSION}/wal-g-pg-20.04-${wgarch}" -o /usr/local/bin/wal-g; \
+    chmod 0755 /usr/local/bin/wal-g; \
+    wal-g --version; \
     apt-get purge -y curl && apt-get autoremove -y && rm -rf /var/lib/apt/lists/*
 ````
 

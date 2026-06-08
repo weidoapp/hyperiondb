@@ -38,6 +38,16 @@ GRANT EXECUTE ON FUNCTION pg_catalog.pg_read_binary_file(text, bigint, bigint, b
 CREATE EXTENSION IF NOT EXISTS pg_search;
 ALTER EXTENSION pg_search UPDATE;
 CREATE EXTENSION IF NOT EXISTS pg_replica;
+CREATE EXTENSION IF NOT EXISTS amcheck;
+SQL
+    psql -U "$POSTGRES_USER" -d postgres -v ON_ERROR_STOP=1 -v appdb="$POSTGRES_DB" <<'SQL'
+CREATE EXTENSION IF NOT EXISTS pg_cron;
+SELECT cron.schedule_in_database(
+  'amcheck-btree',
+  '17 3 * * 0',
+  $cmd$DO $$DECLARE r record; BEGIN FOR r IN SELECT c.oid::regclass AS idx FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid JOIN pg_am a ON a.oid = c.relam JOIN pg_namespace n ON n.oid = c.relnamespace WHERE a.amname = 'btree' AND c.relpersistence = 'p' AND i.indisready AND i.indisvalid AND n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast') LOOP PERFORM bt_index_check(r.idx, true); END LOOP; END$$;$cmd$,
+  :'appdb'
+);
 SQL
     exit 0
   ) &
