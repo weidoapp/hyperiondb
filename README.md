@@ -211,5 +211,5 @@ shipped as a plain Postgres extension. Closest existing thing is Patroni's
 
 ## Listed in
 
-- [https://crates.io/crates/pg_replica](crates.io)
-- [https://pgxn.org/dist/pg_replica/](PGXN)
+- [crates.io](https://crates.io/crates/pg_replica)
+- [PGXN](https://pgxn.org/dist/pg_replica/)
