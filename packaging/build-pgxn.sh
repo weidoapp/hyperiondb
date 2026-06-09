@@ -6,6 +6,7 @@ EXT="pg_replica"
 REF="${1:-HEAD}"
 VERSION="$(sed -n 's/^version = "\(.*\)"/\1/p' "${ROOT}/Cargo.toml" | head -1)"
 PREFIX="${EXT}-${VERSION}"
+TAG="v${VERSION}"
 OUT_DIR="${ROOT}/dist"
 ARCHIVE="${OUT_DIR}/${PREFIX}.zip"
 
@@ -22,9 +23,13 @@ if [ "$META_VERSION" != "$VERSION" ]; then
   exit 1
 fi
 
+if ! git rev-parse -q --verify "refs/tags/${TAG}" >/dev/null; then
+  git tag "$TAG" "$REF"
+fi
+
 mkdir -p "$OUT_DIR"
 rm -f "$ARCHIVE"
-git archive --format=zip --prefix="${PREFIX}/" -o "$ARCHIVE" "$REF"
+git archive --format=zip --prefix="${PREFIX}/" -o "$ARCHIVE" "$TAG"
 
 echo "built $ARCHIVE"
 
