@@ -3,7 +3,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 EXT="pg_replica"
-REF="${1:-HEAD}"
+EXPECTED="${1:-}"
 VERSION="$(sed -n 's/^version = "\(.*\)"/\1/p' "${ROOT}/Cargo.toml" | head -1)"
 PREFIX="${EXT}-${VERSION}"
 TAG="v${VERSION}"
@@ -11,6 +11,11 @@ OUT_DIR="${ROOT}/dist"
 ARCHIVE="${OUT_DIR}/${PREFIX}.zip"
 
 cd "$ROOT"
+
+if [ -n "$EXPECTED" ] && [ "${EXPECTED#v}" != "$VERSION" ]; then
+  echo "version arg '$EXPECTED' does not match Cargo.toml=$VERSION" >&2
+  exit 1
+fi
 
 if [ ! -f META.json ]; then
   echo "missing META.json at repo root" >&2
@@ -24,7 +29,7 @@ if [ "$META_VERSION" != "$VERSION" ]; then
 fi
 
 if ! git rev-parse -q --verify "refs/tags/${TAG}" >/dev/null; then
-  git tag "$TAG" "$REF"
+  git tag "$TAG" HEAD
 fi
 
 mkdir -p "$OUT_DIR"
