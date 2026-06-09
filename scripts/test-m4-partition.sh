@@ -1,34 +1,30 @@
 #!/usr/bin/env bash
 set -uo pipefail
 
-B="${PGBIN:-$HOME/.pgrx/18.4/pgrx-install/bin}"
-R="${ROOT:-/tmp/hyperion-repl}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-P1=54340 RAFT1=7410
+source "$SCRIPT_DIR/lib.sh"
+P1=1
 
-q() { "$B/psql" -h 127.0.0.1 -p "$1" -U postgres -tAc "$2" 2>&1; }
-ins() { "$B/psql" -h 127.0.0.1 -p "$1" -U postgres -tAc "INSERT INTO demo VALUES (\$t\$$2\$t\$)" 2>&1; }
+q() { cl_q "$1" "$2"; }
+ins() { cl_ins "$1" "$2"; }
 ro() { q "$1" "SHOW default_transaction_read_only"; }
-SUDO() { echo "${SUDO_PW:-2422}" | sudo -S "$@" 2>/dev/null; }
-hb_age() { echo $(( $(date +%s%3N) - $(cat /tmp/pg_replica_hb_1 2>/dev/null || echo 0) )); }
 
-cleanup() { SUDO iptables -D INPUT -p tcp --dport "$RAFT1" -j DROP 2>/dev/null; }
+cleanup() { cl_partition_off "$P1"; }
 trap cleanup EXIT
 
-echo "=== bring up cluster ==="
-bash "$SCRIPT_DIR/cluster-repl.sh" up >/dev/null 2>&1
-for i in $(seq 1 80); do q "$P1" "SELECT replica.status()" | grep -q "decided_primary=1 seq=1 quorum=true read_only=false" && break; sleep 0.5; done
+echo "=== cluster ready ==="
+cl_wait_status "$P1" "decided_primary=1 seq=1 quorum=true read_only=false" 120
 echo "  node1: $(q $P1 'SELECT replica.status()')"
 echo "  sanity write: $(ins $P1 healthy)"
 
 echo
-echo "=== PARTITION: firewall node1 raft inbound (port $RAFT1) — postgres + control plane stay ALIVE, but cut off from quorum ==="
-SUDO iptables -I INPUT 1 -p tcp --dport "$RAFT1" -j DROP
+echo "=== PARTITION: firewall node1 raft inbound — postgres + control plane stay ALIVE, but cut off from quorum ==="
+cl_partition_on "$P1"
 echo "  iptables rule installed; node1 is now isolated from peers"
 for i in $(seq 1 20); do [ "$(ro $P1)" = "on" ] && break; sleep 0.5; done
 
 echo "  node1: $(q $P1 'SELECT replica.status()')"
-echo "  node1 control-plane heartbeat age: $(hb_age)ms (fresh => bgworker ALIVE, this is a NETWORK partition not a hang)"
+echo "  node1 control-plane heartbeat age: $(cl_hb_age $P1)ms (fresh => bgworker ALIVE, this is a NETWORK partition not a hang)"
 W=$(ins $P1 split-brain-attempt)
 echo "  write on isolated-but-running primary: $W"
 FENCED=0

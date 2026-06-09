@@ -1,17 +1,15 @@
 #!/usr/bin/env bash
 set -uo pipefail
 
-B="${PGBIN:-$HOME/.pgrx/18.4/pgrx-install/bin}"
-R="${ROOT:-/tmp/hyperion-repl}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-P1=54340 P2=54341 P3=54342
+source "$SCRIPT_DIR/lib.sh"
+P1=1 P2=2 P3=3
 
-q() { "$B/psql" -h 127.0.0.1 -p "$1" -U postgres -tAc "$2" 2>&1; }
-try_write() { "$B/psql" -h 127.0.0.1 -p "$1" -U postgres -tAc "INSERT INTO demo VALUES (\$tag\$$2\$tag\$)" 2>&1; }
+q() { cl_q "$1" "$2"; }
+try_write() { cl_q "$1" "INSERT INTO demo VALUES (\$tag\$$2\$tag\$)"; }
 
-echo "=== bring up fresh cluster ==="
-bash "$SCRIPT_DIR/cluster-repl.sh" up >/dev/null 2>&1
-for i in $(seq 1 60); do q "$P1" "SELECT replica.status()" | grep -q "decided_primary=1" && break; sleep 0.5; done
+echo "=== cluster ready ==="
+cl_wait_status "$P1" "decided_primary=1" 120
 echo "  node1: $(q $P1 'SELECT replica.status()')"
 
 echo
@@ -22,8 +20,8 @@ echo "  write result: $W"
 echo
 echo "=== induce loss of quorum: kill BOTH followers (node 2 + node 3) ==="
 echo "  node 1 is now a minority of 1 — it MUST stop accepting writes on its own"
-"$B/pg_ctl" -D "$R/n2" stop -m immediate >/dev/null 2>&1
-"$B/pg_ctl" -D "$R/n3" stop -m immediate >/dev/null 2>&1
+cl_kill 2
+cl_kill 3
 
 echo "  waiting for check_quorum self-demotion..."
 for i in $(seq 1 40); do
@@ -47,9 +45,8 @@ fi
 
 echo
 echo "=== restore quorum: bring node 2 + node 3 back ==="
-for i in 2 3; do
-  "$B/pg_ctl" -D "$R/n$i" -l "$R/n$i.log" start >/dev/null 2>&1
-done
+cl_start 2
+cl_start 3
 echo "  waiting for node 1 to regain quorum + read-write..."
 for i in $(seq 1 60); do
   s=$(q "$P1" "SELECT replica.status()" 2>/dev/null)

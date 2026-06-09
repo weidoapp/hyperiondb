@@ -1,22 +1,17 @@
 #!/usr/bin/env bash
 set -uo pipefail
 
-B="${PGBIN:-$HOME/.pgrx/18.4/pgrx-install/bin}"
-R="${ROOT:-/tmp/hyperion-repl}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-P1=54340 P2=54341 P3=54342
+source "$SCRIPT_DIR/lib.sh"
+P1=1 P2=2 P3=3
 
-q() { "$B/psql" -h 127.0.0.1 -p "$1" -U postgres -tAc "$2" 2>&1; }
+q() { cl_q "$1" "$2"; }
 recv() { q "$1" "SELECT pg_wal_lsn_diff(COALESCE(pg_last_wal_receive_lsn(),'0/0'),'0/0')::bigint"; }
-status() { for p in $P1 $P2 $P3; do echo -n "  port $p: "; q "$p" "SELECT replica.status()"; done; }
+status() { for p in $P1 $P2 $P3; do echo -n "  node $p: "; q "$p" "SELECT replica.status()"; done; }
 
-echo "=== bring up fresh cluster ==="
-bash "$SCRIPT_DIR/cluster-repl.sh" up >/dev/null 2>&1
+echo "=== cluster ready ==="
 echo "waiting for bootstrap decision (primary=1) + writable..."
-for i in $(seq 1 60); do
-  q "$P1" "SELECT replica.status()" | grep -q "decided_primary=1 seq=1 quorum=true read_only=false" && break
-  sleep 0.5
-done
+cl_wait_status "$P1" "decided_primary=1 seq=1 quorum=true read_only=false" 60
 status
 
 echo
@@ -27,7 +22,7 @@ echo "  rows: n1=$(q $P1 'SELECT count(*) FROM demo') n2=$(q $P2 'SELECT count(*
 
 echo
 echo "=== make node 3 LAG: repoint it at a dead port + kill walreceiver so it CANNOT receive ==="
-q "$P3" "ALTER SYSTEM SET primary_conninfo = 'host=127.0.0.1 port=1 user=replicator'" >/dev/null
+q "$P3" "ALTER SYSTEM SET primary_conninfo = 'host=node1 port=1 user=replicator'" >/dev/null
 q "$P3" "SELECT pg_reload_conf()" >/dev/null
 q "$P3" "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE backend_type='walreceiver'" >/dev/null
 sleep 3
@@ -47,7 +42,7 @@ echo "  rows visible: n2=$(q $P2 'SELECT count(*) FROM demo') n3=$(q $P3 'SELECT
 
 echo
 echo "=== KILL primary (node 1) — system must promote the HIGHER-LSN survivor (node 2) ==="
-"$B/pg_ctl" -D "$R/n1" stop -m immediate >/dev/null 2>&1
+cl_kill 1
 for i in $(seq 1 60); do
   np=$(q "$P2" "SELECT replica.status()" 2>/dev/null)
   echo "$np" | grep -qE "decided_primary=(2|3)" && break
@@ -56,11 +51,11 @@ done
 for i in $(seq 1 30); do [ "$(q $P2 'SELECT pg_is_in_recovery()')" = "f" ] && break; sleep 0.5; done
 
 echo "=== failover decision log ==="
-grep -hE "PROPOSE|DECISION|APPLY promote" "$R"/n2.log "$R"/n3.log 2>/dev/null | tail -8
+{ cl_logs 2; cl_logs 3; } 2>/dev/null | grep -hE "PROPOSE|DECISION|APPLY promote" | tail -8
 
 echo
 echo "=== final status (survivors) ==="
-for p in $P2 $P3; do echo -n "  port $p: "; q "$p" "SELECT replica.status()"; done
+for p in $P2 $P3; do echo -n "  node $p: "; q "$p" "SELECT replica.status()"; done
 
 echo
 echo "=== correctness check ==="

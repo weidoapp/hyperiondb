@@ -30,6 +30,38 @@ pub extern "C-unwind" fn _PG_init() {
         .load();
 }
 
+fn local_wal_lsn(in_recovery: bool) -> u64 {
+    unsafe {
+        if in_recovery {
+            pg_sys::GetXLogReplayRecPtr(std::ptr::null_mut())
+        } else {
+            pg_sys::GetXLogWriteRecPtr()
+        }
+    }
+}
+
+fn standby_conninfo(pg_members: &[rpc::Peer], passfile: &str, node_id: u64) -> String {
+    let mut hosts = Vec::new();
+    let mut ports = Vec::new();
+    for member in pg_members {
+        let (host, port) = apply::split_host_port(&member.addr);
+        hosts.push(host);
+        ports.push(port);
+    }
+    let passfile_kw = if passfile.is_empty() {
+        String::new()
+    } else {
+        format!(" passfile={}", passfile)
+    };
+    format!(
+        "host={} port={} user=replicator{} target_session_attrs=read-write application_name=node{}",
+        hosts.join(","),
+        ports.join(","),
+        passfile_kw,
+        node_id
+    )
+}
+
 #[pg_guard]
 #[unsafe(no_mangle)]
 pub extern "C-unwind" fn pg_replica_supervisor_main(_arg: pg_sys::Datum) {
@@ -122,9 +154,11 @@ pub extern "C-unwind" fn pg_replica_supervisor_main(_arg: pg_sys::Datum) {
     let mut reconfirm_pending = false;
     let mut decided: Option<failover::Decision> = handle.current_decision();
     let mut last_proposed: (u64, u64) = (0, 0);
+    let mut last_proposed_tick: u64 = 0;
     let mut promoted = false;
     let mut rejoining = false;
     let mut applied_primary: u64 = 0;
+    let mut slots_ensured = false;
     let mut applied_read_only: Option<bool> = None;
     let mut applied_sync: Option<String> = None;
     let mut authorized_since: Option<Instant> = None;
@@ -160,7 +194,9 @@ pub extern "C-unwind" fn pg_replica_supervisor_main(_arg: pg_sys::Datum) {
                 promoted = false;
                 rejoining = false;
                 applied_primary = 0;
+                slots_ensured = false;
                 reconfirm_pending = false;
+                last_proposed = (0, 0);
                 pgrx::log!(
                     "pg_replica: node {} DECISION seq={} primary={}",
                     node_id,
@@ -174,7 +210,7 @@ pub extern "C-unwind" fn pg_replica_supervisor_main(_arg: pg_sys::Datum) {
 
         ticks += 1;
         if ticks % gossip_every == 0 {
-            let lsn = apply::wal_lsn(&psql, &my_host, &my_port, in_recovery);
+            let lsn = local_wal_lsn(in_recovery);
             peers_lsn.insert(node_id, (lsn, in_recovery, Instant::now()));
             let payload = failover::encode_gossip(lsn, in_recovery, reconfirm_pending);
             handle.gossip_broadcast(node_id, &payload);
@@ -230,21 +266,23 @@ pub extern "C-unwind" fn pg_replica_supervisor_main(_arg: pg_sys::Datum) {
             if live.len() >= majority {
                 if let Some(candidate) = candidate {
                     let seq = decided.map(|decision| decision.seq).unwrap_or(0) + 1;
-                    if last_proposed != (seq, candidate) {
+                    if last_proposed != (seq, candidate)
+                        || ticks.saturating_sub(last_proposed_tick) >= 20
+                    {
                         let decision = failover::Decision {
                             seq,
                             primary: candidate,
                         };
-                        if handle.propose(decision) {
-                            last_proposed = (seq, candidate);
-                            pgrx::log!(
-                                "pg_replica: node {} PROPOSE seq={} primary={} live={:?}",
-                                node_id,
-                                seq,
-                                candidate,
-                                live
-                            );
-                        }
+                        handle.propose(decision);
+                        last_proposed = (seq, candidate);
+                        last_proposed_tick = ticks;
+                        pgrx::log!(
+                            "pg_replica: node {} PROPOSE seq={} primary={} live={:?}",
+                            node_id,
+                            seq,
+                            candidate,
+                            live
+                        );
                     }
                 }
             }
@@ -297,16 +335,7 @@ pub extern "C-unwind" fn pg_replica_supervisor_main(_arg: pg_sys::Datum) {
                 }
             } else if decided_primary != 0 && applied_primary != decided_primary {
                 if let Some(member) = pg_members.iter().find(|member| member.id == decided_primary) {
-                    let (primary_host, primary_port) = apply::split_host_port(&member.addr);
-                    let passfile_kw = if passfile.is_empty() {
-                        String::new()
-                    } else {
-                        format!(" passfile={}", passfile)
-                    };
-                    let conninfo = format!(
-                        "host={} port={} user=replicator{} application_name=node{}",
-                        primary_host, primary_port, passfile_kw, node_id
-                    );
+                    let conninfo = standby_conninfo(&pg_members, &passfile, node_id);
                     pgrx::log!(
                         "pg_replica: node {} APPLY repoint standby -> primary {} ({})",
                         node_id,
@@ -327,6 +356,22 @@ pub extern "C-unwind" fn pg_replica_supervisor_main(_arg: pg_sys::Datum) {
                 }
             }
         } else {
+            if decided_primary == node_id && !slots_ensured {
+                for member in &pg_members {
+                    if member.id != node_id {
+                        let _ = apply::run_sql(
+                            &psql,
+                            &my_host,
+                            &my_port,
+                            &format!(
+                                "SELECT pg_create_physical_replication_slot('node{}', true) WHERE NOT EXISTS (SELECT 1 FROM pg_replication_slots WHERE slot_name = 'node{}')",
+                                member.id, member.id
+                            ),
+                        );
+                    }
+                }
+                slots_ensured = true;
+            }
             let raw_auth = match decided {
                 None => true,
                 Some(decision) => {
@@ -444,6 +489,7 @@ pub extern "C-unwind" fn pg_replica_supervisor_main(_arg: pg_sys::Datum) {
                             &primary_port,
                             node_id,
                             &passfile,
+                            &standby_conninfo(&pg_members, &passfile, node_id),
                         );
                         rejoining = true;
                     }

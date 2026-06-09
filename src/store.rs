@@ -339,10 +339,21 @@ fn load<T>(path: &Path) -> T
 where
     T: Default + for<'de> Deserialize<'de>,
 {
-    std::fs::read(path)
-        .ok()
-        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
-        .unwrap_or_default()
+    match std::fs::read(path) {
+        Ok(bytes) => serde_json::from_slice(&bytes).unwrap_or_else(|e| {
+            panic!(
+                "pg_replica: durable raft state at {} is present but unreadable ({}); refusing to start with empty state",
+                path.display(),
+                e
+            )
+        }),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => T::default(),
+        Err(e) => panic!(
+            "pg_replica: cannot read raft state at {} ({}); refusing to start",
+            path.display(),
+            e
+        ),
+    }
 }
 
 fn atomic_write(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
@@ -353,10 +364,8 @@ fn atomic_write(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
         file.sync_all()?;
     }
     std::fs::rename(&tmp, path)?;
-    if let Some(dir) = path.parent() {
-        if let Ok(dir_file) = std::fs::File::open(dir) {
-            let _ = dir_file.sync_all();
-        }
+    if let Some(dir) = path.parent().filter(|dir| !dir.as_os_str().is_empty()) {
+        std::fs::File::open(dir)?.sync_all()?;
     }
     Ok(())
 }

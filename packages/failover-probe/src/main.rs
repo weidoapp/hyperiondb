@@ -29,16 +29,20 @@ async fn main() {
     });
 
     let row = client
-        .query_one("SELECT inet_server_port(), pg_is_in_recovery()", &[])
+        .query_one(
+            "SELECT inet_server_port(), pg_is_in_recovery(), current_setting('pg_replica.node_id')",
+            &[],
+        )
         .await
         .expect("probe query failed");
     let port: i32 = row.get(0);
     let in_recovery: bool = row.get(1);
+    let node: String = row.get(2);
 
     client
         .execute("INSERT INTO demo VALUES ($1)", &[&format!("routed-{label}")])
         .await
         .expect("write failed");
 
-    println!("OK port={port} in_recovery={in_recovery}");
+    println!("OK node={node} port={port} in_recovery={in_recovery}");
 }

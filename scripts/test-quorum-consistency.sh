@@ -1,20 +1,17 @@
 #!/usr/bin/env bash
 set -uo pipefail
 
-export SYNCHRONOUS=on
-B="${PGBIN:-$HOME/.pgrx/18.4/pgrx-install/bin}"
-R="${ROOT:-/tmp/hyperion-repl}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-P1=54340 P2=54341 P3=54342
+source "$SCRIPT_DIR/lib.sh"
+P1=1 P2=2 P3=3
 FAILOVER_LIMIT="${FAILOVER_LIMIT:-30}"
 
-q() { "$B/psql" -h 127.0.0.1 -p "$1" -U postgres -tAc "$2" 2>&1; }
+q() { cl_q "$1" "$2"; }
 new_primary() { for p in $P2 $P3; do [ "$(q $p 'SELECT pg_is_in_recovery()')" = "f" ] && { echo "$p"; return; }; done; }
-break_stream() { q "$1" "ALTER SYSTEM SET primary_conninfo = 'host=127.0.0.1 port=1 user=replicator application_name=node$2'" >/dev/null; q "$1" "SELECT pg_reload_conf()" >/dev/null; q "$1" "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE backend_type='walreceiver'" >/dev/null; }
+break_stream() { q "$1" "ALTER SYSTEM SET primary_conninfo = 'host=node1 port=1 user=replicator application_name=node$2'" >/dev/null; q "$1" "SELECT pg_reload_conf()" >/dev/null; q "$1" "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE backend_type='walreceiver'" >/dev/null; }
 
-echo "=== bring up cluster with pg_replica.synchronous = on ==="
-bash "$SCRIPT_DIR/cluster-repl.sh" up >/dev/null 2>&1
-for i in $(seq 1 80); do q "$P1" "SELECT replica.status()" | grep -q "decided_primary=1 seq=1 quorum=true read_only=false" && break; sleep 0.5; done
+echo "=== cluster ready (pg_replica.synchronous = on) ==="
+cl_wait_status "$P1" "decided_primary=1 seq=1 quorum=true read_only=false" 80
 for i in $(seq 1 80); do q "$P1" "SHOW synchronous_standby_names" | grep -q "ANY" && q "$P1" "SELECT sync_state FROM pg_stat_replication" | grep -q "quorum" && break; sleep 0.5; done
 
 echo
@@ -51,7 +48,7 @@ for i in $(seq 1 20); do q "$P1" "SELECT count(*) FROM pg_stat_replication WHERE
 echo "  confirming standbys now: $(q $P1 "SELECT coalesce(string_agg(application_name,',' ORDER BY application_name),'(none)') FROM pg_stat_replication WHERE sync_state='quorum'")"
 
 t0=$(date +%s)
-timeout 10 "$B/psql" -h 127.0.0.1 -p $P1 -U postgres -v ON_ERROR_STOP=1 -tAc "INSERT INTO demo SELECT 'qs-'||g FROM generate_series(1,500) g" >/dev/null 2>&1
+cl_psql_t 10 $P1 -v ON_ERROR_STOP=1 -tAc "INSERT INTO demo SELECT 'qs-'||g FROM generate_series(1,500) g" >/dev/null 2>&1
 RC=$?; t1=$(date +%s); ELAPSED=$((t1 - t0))
 ACKED="$(q $P1 "SELECT count(*) FROM demo WHERE t LIKE 'qs-%'")"
 ON2="$(q $P2 "SELECT count(*) FROM demo WHERE t LIKE 'qs-%'")"
@@ -60,13 +57,13 @@ echo "  INSERT 500 under ANY 1: exit=$RC elapsed=${ELAPSED}s (single failure doe
 echo "  acked on primary=$ACKED  present on node2=$ON2  present on node3=$ON3 (node3 frozen => durability rests on node2 alone)"
 
 echo "  KILL -9 the primary (node1)..."
-"$B/pg_ctl" -D "$R/n1" stop -m immediate >/dev/null 2>&1
+cl_kill 1
 NP=""
-for i in $(seq 1 $(( FAILOVER_LIMIT * 2 ))); do NP="$(new_primary)"; [ -n "$NP" ] && break; sleep 0.5; done
+for i in $(seq 1 160); do NP="$(new_primary)"; [ -n "$NP" ] && break; sleep 0.5; done
 if [ -n "$NP" ]; then
-  for i in $(seq 1 30); do [ "$(q $NP 'SHOW default_transaction_read_only')" = "off" ] && break; sleep 0.5; done
+  for i in $(seq 1 120); do [ "$(q $NP 'SHOW default_transaction_read_only')" = "off" ] && break; sleep 0.5; done
   SURVIVED="$(q $NP "SELECT count(*) FROM demo WHERE t LIKE 'qs-%'")"
-  PN=$(( NP - P1 + 1 ))
+  PN=$NP
 else
   SURVIVED="?"; PN="?"
 fi

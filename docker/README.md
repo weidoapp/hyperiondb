@@ -3,6 +3,12 @@
 A 3-node **ParadeDB** cluster with **pg_replica** automatic Raft failover, plus
 **Dozzle** for log viewing — for integration testing.
 
+> **Running the automated test suite?** Use `../scripts/test.ps1` (Windows) or
+> `../scripts/test.sh` (Linux/macOS/CI). Those drive a separate
+> `docker-compose.test.yml` (no Dozzle, `restart: "no"`, `NET_ADMIN`, plus a
+> runner container) and bring a fresh cluster up/down per test. The compose file
+> below is the **demo / manual** cluster.
+
 ## Quick start
 
 ```bash

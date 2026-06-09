@@ -1,0 +1,16 @@
+name: tests
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+jobs:
+  suite:
+    name: docker test suite (pg18)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Run the suite
+        run: bash scripts/test.sh

@@ -1,7 +1,7 @@
 # TODO
 
 [] all configs via client only
-[] self contained tests
+[] optimizations
 
 ## Explicitly out of scope for open source
 

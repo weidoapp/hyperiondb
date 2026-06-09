@@ -19,6 +19,11 @@ PASSFILE=/var/lib/postgresql/.pgpass
 : "${APP_PASSWORD:=weido_pw}"
 : "${APP_DB:=weido}"
 : "${SYNCHRONOUS:=off}"
+: "${WAL_KEEP:=512MB}"
+: "${MAX_WAL:=1GB}"
+: "${COMPACT_THRESHOLD:=64}"
+: "${RAFT_DIR:=/tmp}"
+: "${MAX_SLOT_WAL_KEEP:=1GB}"
 
 # Running as root (image default): fix ownership, then drop to the postgres user.
 if [ "$(id -u)" = '0' ]; then
@@ -45,7 +50,10 @@ max_wal_senders = 10
 max_replication_slots = 10
 hot_standby = on
 wal_log_hints = on
-wal_keep_size = '512MB'
+wal_keep_size = '$WAL_KEEP'
+max_wal_size = '$MAX_WAL'
+max_slot_wal_keep_size = '$MAX_SLOT_WAL_KEEP'
+primary_slot_name = 'node$NODE_ID'
 shared_preload_libraries = 'pg_search,pg_replica'
 pg_replica.node_id = $NODE_ID
 pg_replica.raft_port = $RAFT_PORT
@@ -54,6 +62,10 @@ pg_replica.pg_addrs = '$PG_ADDRS'
 pg_replica.psql = '$PGBIN/psql'
 pg_replica.passfile = '$PASSFILE'
 pg_replica.synchronous = $SYNCHRONOUS
+pg_replica.compact_threshold = $COMPACT_THRESHOLD
+pg_replica.raft_dir = '$RAFT_DIR'
+pg_replica.rejoin_script = '/opt/pg_replica/rejoin.sh'
+pg_replica.watchdog_script = '/opt/pg_replica/watchdog.sh'
 EOF
 }
 
@@ -83,7 +95,13 @@ GRANT EXECUTE ON FUNCTION pg_catalog.pg_read_binary_file(text, bigint, bigint, b
 CREATE ROLE "$APP_USER" WITH LOGIN PASSWORD '$APP_PASSWORD';
 CREATE DATABASE "$APP_DB" OWNER "$APP_USER";
 CREATE EXTENSION IF NOT EXISTS pg_replica;
+CREATE TABLE IF NOT EXISTS demo (t text);
 SQL
+    for spec in $(echo "$PEERS" | tr ',' ' '); do
+      pid="${spec%%@*}"
+      [ "$pid" != "$NODE_ID" ] && "$PGBIN/psql" -h 127.0.0.1 -U postgres -d postgres -tAc \
+        "SELECT pg_create_physical_replication_slot('node$pid', true)" >/dev/null 2>&1 || true
+    done
     "$PGBIN/psql" -h 127.0.0.1 -U postgres -d "$APP_DB" -v ON_ERROR_STOP=1 \
       -c 'CREATE EXTENSION IF NOT EXISTS pg_search;' >/dev/null
     "$PGBIN/pg_ctl" -D "$PGDATA" -w stop >/dev/null
@@ -99,6 +117,7 @@ SQL
 
 cluster_name = 'node$NODE_ID'
 pg_replica.node_id = $NODE_ID
+primary_slot_name = 'node$NODE_ID'
 EOF
     echo "primary_conninfo = 'host=$SEED_HOST port=5432 user=replicator passfile=$PASSFILE application_name=node$NODE_ID'" \
       >> "$PGDATA/postgresql.auto.conf"
@@ -108,4 +127,45 @@ EOF
 fi
 
 chmod 0700 "$PGDATA"
-exec "$PGBIN/postgres" -D "$PGDATA"
+
+if [ -f /tmp/faketime ]; then
+  FT_LIB="$(ls /usr/lib/*/faketime/libfaketime.so.1 2>/dev/null | head -1)"
+  if [ -n "$FT_LIB" ]; then
+    export LD_PRELOAD="$FT_LIB"
+    export FAKETIME="$(cat /tmp/faketime)"
+    echo "[node$NODE_ID] libfaketime active: FAKETIME=$FAKETIME"
+  fi
+fi
+
+LOGFILE=/var/lib/postgresql/data.log
+REJOIN_MARK=/tmp/pg_replica_rejoin_active
+rm -f "$PGDATA/postmaster.pid"
+touch "$LOGFILE"
+
+graceful_stop() {
+  "$PGBIN/pg_ctl" -D "$PGDATA" -m fast stop >/dev/null 2>&1 || true
+  exit 0
+}
+trap graceful_stop TERM INT
+
+"$PGBIN/pg_ctl" -D "$PGDATA" -l "$LOGFILE" -w -t 120 start || true
+
+tail -F "$LOGFILE" &
+TAIL_PID=$!
+
+if [ "${PGR_SUPERVISE:-monitor}" = "hold" ]; then
+  wait "$TAIL_PID"
+else
+  while :; do
+    if ! "$PGBIN/pg_ctl" -D "$PGDATA" status >/dev/null 2>&1; then
+      [ -f "$REJOIN_MARK" ] && { sleep 2; continue; }
+      sleep 5
+      "$PGBIN/pg_ctl" -D "$PGDATA" status >/dev/null 2>&1 && continue
+      [ -f "$REJOIN_MARK" ] && continue
+      echo "[node$NODE_ID] postgres down and no rejoin in progress; exiting so the container restart policy can recover it"
+      kill "$TAIL_PID" 2>/dev/null || true
+      exit 1
+    fi
+    sleep 3
+  done
+fi

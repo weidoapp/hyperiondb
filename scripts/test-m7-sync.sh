@@ -1,20 +1,17 @@
 #!/usr/bin/env bash
 set -uo pipefail
 
-export SYNCHRONOUS=on
-B="${PGBIN:-$HOME/.pgrx/18.4/pgrx-install/bin}"
-R="${ROOT:-/tmp/hyperion-repl}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-P1=54340 P2=54341 P3=54342
+source "$SCRIPT_DIR/lib.sh"
+P1=1 P2=2 P3=3
 
-q() { "$B/psql" -h 127.0.0.1 -p "$1" -U postgres -tAc "$2" 2>&1; }
+q() { cl_q "$1" "$2"; }
 new_primary() { for p in $P2 $P3; do [ "$(q $p 'SELECT pg_is_in_recovery()')" = "f" ] && { echo "$p"; return; }; done; }
-break_stream() { q "$1" "ALTER SYSTEM SET primary_conninfo = 'host=127.0.0.1 port=1 user=replicator application_name=node$2'" >/dev/null; q "$1" "SELECT pg_reload_conf()" >/dev/null; q "$1" "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE backend_type='walreceiver'" >/dev/null; }
-restore_stream() { q "$1" "ALTER SYSTEM SET primary_conninfo = 'host=127.0.0.1 port=$P1 user=replicator application_name=node$2'" >/dev/null; q "$1" "SELECT pg_reload_conf()" >/dev/null; }
+break_stream() { q "$1" "ALTER SYSTEM SET primary_conninfo = 'host=node1 port=1 user=replicator application_name=node$2'" >/dev/null; q "$1" "SELECT pg_reload_conf()" >/dev/null; q "$1" "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE backend_type='walreceiver'" >/dev/null; }
+restore_stream() { q "$1" "ALTER SYSTEM SET primary_conninfo = 'host=node1 port=5432 user=replicator application_name=node$2'" >/dev/null; q "$1" "SELECT pg_reload_conf()" >/dev/null; }
 
-echo "=== bring up cluster with pg_replica.synchronous = on ==="
-bash "$SCRIPT_DIR/cluster-repl.sh" up >/dev/null 2>&1
-for i in $(seq 1 80); do q "$P1" "SELECT replica.status()" | grep -q "decided_primary=1 seq=1 quorum=true read_only=false" && break; sleep 0.5; done
+echo "=== cluster ready (pg_replica.synchronous = on) ==="
+cl_wait_status "$P1" "decided_primary=1 seq=1 quorum=true read_only=false" 80
 for i in $(seq 1 80); do q "$P1" "SHOW synchronous_standby_names" | grep -q "ANY" && q "$P1" "SELECT sync_state FROM pg_stat_replication" | grep -q "quorum" && break; sleep 0.5; done
 
 echo
@@ -33,7 +30,7 @@ break_stream $P3 3
 sleep 3
 echo "  node1 still a writable primary? read_only=$(q $P1 'SHOW default_transaction_read_only')  (raft quorum kept)"
 t0=$(date +%s)
-timeout 6 "$B/psql" -h 127.0.0.1 -p $P1 -U postgres -tAc "INSERT INTO demo VALUES ('sync-blocked')" >/dev/null 2>&1
+cl_psql_t 6 $P1 -v ON_ERROR_STOP=1 -tAc "INSERT INTO demo VALUES ('sync-blocked')" >/dev/null 2>&1
 RC=$?; t1=$(date +%s); ELAPSED=$((t1 - t0))
 echo "  commit with no confirming standby: exit=$RC elapsed=${ELAPSED}s (blocked => sync withheld the ack)"
 BLOCKED=0; [ "$RC" -ne 0 ] && [ "$ELAPSED" -ge 4 ] && BLOCKED=1
@@ -43,7 +40,7 @@ restore_stream $P2 2
 restore_stream $P3 3
 for i in $(seq 1 30); do [ "$(q $P1 "SELECT count(*) FROM pg_stat_replication")" -ge 1 ] 2>/dev/null && break; sleep 0.5; done
 t0=$(date +%s)
-"$B/psql" -h 127.0.0.1 -p $P1 -U postgres -tAc "INSERT INTO demo VALUES ('sync-ok')" >/dev/null 2>&1
+cl_psql $P1 -tAc "INSERT INTO demo VALUES ('sync-ok')" >/dev/null 2>&1
 RC2=$?; t1=$(date +%s); ELAPSED2=$((t1 - t0))
 echo "  commit WITH a confirming standby: exit=$RC2 elapsed=${ELAPSED2}s (proceeds once a standby has it)"
 UNBLOCKED=0; [ "$RC2" -eq 0 ] && [ "$ELAPSED2" -le 3 ] && UNBLOCKED=1
@@ -54,7 +51,7 @@ q "$P1" "INSERT INTO demo SELECT 'zl-'||g FROM generate_series(1,500) g" >/dev/n
 ACKED=$(q $P1 "SELECT count(*) FROM demo WHERE t LIKE 'zl-%'")
 echo "  $ACKED rows committed under sync (each acked => on a quorum)"
 echo "  KILL -9 the primary immediately..."
-"$B/pg_ctl" -D "$R/n1" stop -m immediate >/dev/null 2>&1
+cl_kill 1
 NP=""; for i in $(seq 1 60); do NP=$(new_primary); [ -n "$NP" ] && break; sleep 0.5; done
 for i in $(seq 1 30); do [ "$(q $NP 'SHOW default_transaction_read_only')" = "off" ] && break; sleep 0.5; done
 SURVIVED=$(q $NP "SELECT count(*) FROM demo WHERE t LIKE 'zl-%'")

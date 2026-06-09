@@ -128,17 +128,15 @@ impl RaftHandle {
         self.decision.current()
     }
 
-    pub fn propose(&self, decision: Decision) -> bool {
-        self.runtime.block_on(async {
-            matches!(
-                tokio::time::timeout(
-                    Duration::from_millis(800),
-                    self.raft.client_write(decision),
-                )
-                .await,
-                Ok(Ok(_))
+    pub fn propose(&self, decision: Decision) {
+        let raft = self.raft.clone();
+        self.runtime.spawn(async move {
+            let _ = tokio::time::timeout(
+                Duration::from_millis(800),
+                raft.client_write(decision),
             )
-        })
+            .await;
+        });
     }
 
     pub fn gossip_broadcast(&self, from: u64, payload: &[u8]) {

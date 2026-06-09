@@ -1,24 +1,22 @@
 #!/usr/bin/env bash
 set -uo pipefail
 
-B="${PGBIN:-$HOME/.pgrx/18.4/pgrx-install/bin}"
-R="${ROOT:-/tmp/hyperion-repl}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-P1=54340 P2=54341 P3=54342
+source "$SCRIPT_DIR/lib.sh"
+P1=1 P2=2 P3=3
 
-q() { "$B/psql" -h 127.0.0.1 -p "$1" -U postgres -tAc "$2" 2>&1; }
-ins() { "$B/psql" -h 127.0.0.1 -p "$1" -U postgres -tAc "INSERT INTO demo VALUES (\$t\$$2\$t\$)" 2>&1; }
+q() { cl_q "$1" "$2"; }
+ins() { cl_ins "$1" "$2"; }
 primary_port() { for p in $P1 $P2 $P3; do q "$p" "SELECT 1" >/dev/null 2>&1 && [ "$(q $p 'SELECT pg_is_in_recovery()')" = "f" ] && { echo "$p"; return; }; done; }
 
-echo "=== bring up cluster ==="
-bash "$SCRIPT_DIR/cluster-repl.sh" up >/dev/null 2>&1
-for i in $(seq 1 60); do q "$P1" "SELECT replica.status()" | grep -q "decided_primary=1 seq=1 quorum=true read_only=false" && break; sleep 0.5; done
+echo "=== cluster ready ==="
+cl_wait_status "$P1" "decided_primary=1 seq=1 quorum=true read_only=false" 60
 ins $P1 "before-failover" >/dev/null
 echo "  seeded 1 row on node1; n1=$(q $P1 'SELECT count(*) FROM demo')"
 
 echo
 echo "=== kill primary node1 -> failover ==="
-"$B/pg_ctl" -D "$R/n1" stop -m immediate >/dev/null 2>&1
+cl_kill 1
 NP=""
 for i in $(seq 1 60); do NP=$(primary_port); [ -n "$NP" ] && [ "$NP" != "$P1" ] && break; sleep 0.5; done
 echo "  new primary port: $NP"
@@ -28,7 +26,7 @@ echo "  wrote 'after-failover' on new primary; rows=$(q $NP 'SELECT count(*) FRO
 
 echo
 echo "=== restart deposed primary node1 -> must NOT accept writes, must rejoin as standby ==="
-"$B/pg_ctl" -D "$R/n1" -l "$R/n1.log" start >/dev/null 2>&1
+cl_start 1
 SAW_WRITABLE=0
 for i in $(seq 1 50); do
   up=$(q $P1 "SELECT 1" 2>/dev/null)
@@ -47,7 +45,7 @@ for i in $(seq 1 60); do [ "$(q $P1 'SELECT pg_is_in_recovery()' 2>/dev/null)" =
 
 echo
 echo "=== final status ==="
-for p in $P1 $P2 $P3; do echo -n "  $p: "; q "$p" "SELECT replica.status()"; done
+for p in $P1 $P2 $P3; do echo -n "  node $p: "; q "$p" "SELECT replica.status()"; done
 echo "  data: n1=[$(q $P1 'SELECT string_agg(t,$$,$$ ORDER BY t) FROM demo')] new_primary=[$(q $NP 'SELECT string_agg(t,$$,$$ ORDER BY t) FROM demo')]"
 
 echo

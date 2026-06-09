@@ -99,38 +99,38 @@ Failover latency
 
 ## Test
 
-```bash
-# Build dependencies
-
-sudo apt-get update
-sudo apt-get install -y \
-  build-essential pkg-config libssl-dev \
-  libreadline-dev zlib1g-dev flex bison \
-  libxml2-dev libxslt-dev libxml2-utils xsltproc \
-  ccache libclang-dev clang \
-  iptables libfaketime
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-source "$HOME/.cargo/env"
-rustup default stable
-rustc --version
-
-# test dependencies
-cargo install --locked cargo-pgrx --version 0.18.1
-cargo pgrx init
-cargo pgrx run pg18
-
-CREATE EXTENSION pg_replica;
-```
+The whole suite runs against a real 3-node cluster **in Docker** — the only
+prerequisite is Docker (Desktop on Windows/macOS, or Engine on Linux). No local
+Rust, pgrx, Postgres, or WSL is required; the extension and the test clients are
+built inside the images.
 
 ### Run the whole test suite
 
-One command builds the extension + test clients and runs every test (3-node
-clusters in `/tmp`, torn down between each):
+One command builds the node + runner images and runs every test, bringing up a
+fresh 3-node cluster per test and tearing it down afterward:
+
+Note. It's a long run (> 20 min).
+
+```powershell
+# Windows (PowerShell)
+./scripts/test.ps1              # build, then run all tests + summary
+./scripts/test.ps1 -NoBuild     # skip the image rebuild
+```
 
 ```bash
-bash scripts/run-all-tests.sh            # build, then run all tests + summary
-bash scripts/run-all-tests.sh --no-build # skip the rebuild
+# Linux / macOS / CI
+bash scripts/test.sh            # build, then run all tests + summary
+bash scripts/test.sh --no-build # skip the image rebuild
 ```
+
+How it works: `docker/docker-compose.test.yml` runs the 3 nodes (built from
+`docker/Dockerfile` with `TEST_TOOLS=1`, which adds `iptables`, `libfaketime`,
+`jq`, `procps`) plus a slim **runner** container that holds the test scripts, the
+Rust probe/chaos-writer/model binaries, and the Docker CLI. The runner drives the
+cluster through `scripts/lib.sh` primitives: `docker kill/start/restart` for node
+failure, `docker exec kill -STOP` for control-plane hangs, `docker pause` for a
+whole-primary freeze, in-container `iptables` for raft partitions, and
+`libfaketime` for clock skew.
 
 Coverage (`scripts/test-*.sh`, each spins a real 3-node cluster):
 
@@ -148,7 +148,7 @@ Coverage (`scripts/test-*.sh`, each spins a real 3-node cluster):
 | `test-m7-sync` | quorum-sync = **zero committed-transaction loss** on failover |
 | `test-quorum-consistency` | the Postgres **sync quorum** (`synchronous_standby_names`) and the **Raft consensus quorum** name the same nodes, and a write confirmed by one standby is **promoted onto that standby** — no two-quorum drift on failover |
 | `test-perf` | supervisor **memory** (single-digit MB private overhead), **idle CPU**, write **throughput** (pgbench), and **failover latency** |
-| `test-chaos` | Jepsen-style: continuous writer under partitions / SIGSTOP / kill / clock-skew / slow-disk / rolling-restart — **0 split-brain**, converges, zero-loss for clean failovers |
+| `test-chaos` | Jepsen-style: continuous writer under partitions / freeze / kill / clock-skew / slow-disk / rolling-restart — **0 split-brain**, converges, zero-loss for clean failovers |
 
 ---
 

@@ -36,6 +36,12 @@ RUN set -eux; \
     cp /staging/pg_replica.control "${SHARE}/extension/"; \
     cp /staging/pg_replica--*.sql "${SHARE}/extension/"; \
     rm -rf /staging
+ARG TEST_TOOLS=0
+RUN if [ "$TEST_TOOLS" = "1" ]; then \
+      apt-get update; \
+      apt-get install -y --no-install-recommends iptables libfaketime jq procps; \
+      rm -rf /var/lib/apt/lists/*; \
+    fi
 COPY docker/entrypoint.sh /opt/pg_replica/entrypoint.sh
 COPY scripts/rejoin.sh    /opt/pg_replica/rejoin.sh
 COPY scripts/watchdog.sh  /opt/pg_replica/watchdog.sh

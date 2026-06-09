@@ -23,6 +23,7 @@ pub fn spawn_rejoin(
     leader_port: &str,
     node_id: u64,
     passfile: &str,
+    standby_conninfo: &str,
 ) -> bool {
     Command::new("setsid")
         .arg("bash")
@@ -33,6 +34,7 @@ pub fn spawn_rejoin(
         .arg(leader_port)
         .arg(node_id.to_string())
         .arg(passfile)
+        .arg(standby_conninfo)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())

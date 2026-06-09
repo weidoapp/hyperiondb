@@ -1,10 +1,9 @@
 #!/usr/bin/env bash
 set -uo pipefail
 
-B="${PGBIN:-$HOME/.pgrx/18.4/pgrx-install/bin}"
-R="${ROOT:-/tmp/hyperion-repl}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-P1=54340 P2=54341 P3=54342
+source "$SCRIPT_DIR/lib.sh"
+P1=1 P2=2 P3=3
 CPU_WINDOW="${CPU_WINDOW:-8}"
 PERF_DUR="${PERF_DUR:-10}"
 PERF_CLIENTS="${PERF_CLIENTS:-8}"
@@ -12,44 +11,21 @@ PERF_JOBS="${PERF_JOBS:-4}"
 MEM_LIMIT_KB="${MEM_LIMIT_KB:-10240}"
 CPU_LIMIT="${CPU_LIMIT:-20.0}"
 FAILOVER_LIMIT="${FAILOVER_LIMIT:-30}"
-CLK="$(getconf CLK_TCK)"
+CLK="$(cl_clk_tck 1)"; CLK="${CLK:-100}"
 
-q() { PGCONNECT_TIMEOUT=2 "$B/psql" -h 127.0.0.1 -p "$1" -U postgres -tAc "$2" 2>/dev/null; }
-try_write() { PGCONNECT_TIMEOUT=1 "$B/psql" -h 127.0.0.1 -p "$1" -U postgres -v ON_ERROR_STOP=1 -tAc "INSERT INTO perf VALUES (-1)" >/dev/null 2>&1; }
+q() { PGCONNECT_TIMEOUT=2 cl_q_quiet "$1" "$2"; }
+try_write() { PGCONNECT_TIMEOUT=1 cl_psql "$1" -v ON_ERROR_STOP=1 -tAc "INSERT INTO perf VALUES (-1)" >/dev/null 2>&1; }
 primary_port() { for p in $P1 $P2 $P3; do [ "$(q "$p" 'SELECT pg_is_in_recovery()')" = "f" ] && { echo "$p"; return; }; done; }
 now_ms() { date +%s%3N; }
 
-supervisor_pid() {
-  local pm pid
-  pm="$(head -1 "$R/n$1/postmaster.pid" 2>/dev/null)"
-  [ -z "$pm" ] && return 1
-  for pid in $(pgrep -P "$pm" 2>/dev/null); do
-    if tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null | grep -q "pg_replica supervisor"; then
-      echo "$pid"; return 0
-    fi
-  done
-  return 1
-}
-cpu_ticks() {
-  local st; st="$(cat "/proc/$1/stat" 2>/dev/null)" || return 1
-  st="${st#*) }"; set -- $st; echo $(( ${12} + ${13} ))
-}
-rss_kb()  { ps -o rss= -p "$1" 2>/dev/null | tr -d ' '; }
-pss_kb()  { awk '/^Pss:/{print $2; exit}' "/proc/$1/smaps_rollup" 2>/dev/null; }
-priv_kb() { awk '/^Private_Clean|^Private_Dirty/{s+=$2} END{print s+0}' "/proc/$1/smaps_rollup" 2>/dev/null; }
-
-echo "=== bring up fresh cluster (asynchronous mode) ==="
-bash "$SCRIPT_DIR/cluster-repl.sh" up >/dev/null 2>&1
-for i in $(seq 1 80); do
-  q "$P1" "SELECT replica.status()" | grep -q "decided_primary=1 seq=1 quorum=true read_only=false" && break
-  sleep 0.5
-done
+echo "=== cluster ready (asynchronous mode) ==="
+cl_wait_status "$P1" "decided_primary=1 seq=1 quorum=true read_only=false" 80
 for i in $(seq 1 30); do [ "$(q $P2 'SELECT pg_is_in_recovery()')" = "t" ] && [ "$(q $P3 'SELECT pg_is_in_recovery()')" = "t" ] && break; sleep 0.5; done
 q "$P1" "CREATE TABLE perf (id bigint)" >/dev/null
 echo "  primary=$(primary_port) status: $(q $P1 'SELECT replica.status()' | sed 's/.*| //')"
 
 declare -A PID
-for n in 1 2 3; do PID[$n]="$(supervisor_pid $n)"; done
+for n in 1 2 3; do PID[$n]="$(cl_supervisor_pid $n)"; done
 echo "  supervisor pids: n1=${PID[1]:-?} n2=${PID[2]:-?} n3=${PID[3]:-?}"
 
 echo
@@ -59,7 +35,7 @@ MEM_OK=1; MEM_MAX_PRIV=0
 for n in 1 2 3; do
   pid="${PID[$n]}"
   if [ -z "$pid" ]; then echo "  node$n: supervisor pid NOT found"; MEM_OK=0; continue; fi
-  rss="$(rss_kb "$pid")"; pss="$(pss_kb "$pid")"; priv="$(priv_kb "$pid")"
+  rss="$(cl_rss_kb $n "$pid")"; pss="$(cl_pss_kb $n "$pid")"; priv="$(cl_priv_kb $n "$pid")"
   printf '  node%s pid=%s  RSS=%s kB  PSS=%s kB  PRIVATE=%s kB\n' "$n" "$pid" "${rss:-?}" "${pss:-?}" "${priv:-?}"
   [ -n "$priv" ] && [ "$priv" -gt "$MEM_MAX_PRIV" ] && MEM_MAX_PRIV="$priv"
   { [ -z "$priv" ] || [ "$priv" -ge "$MEM_LIMIT_KB" ]; } && MEM_OK=0
@@ -70,12 +46,12 @@ echo
 echo "=== B. CPU usage of the supervisor bgworker (idle steady state, ${CPU_WINDOW}s window) ==="
 CPU_OK=1; CPU_MAX="0.0"
 declare -A T0
-for n in 1 2 3; do [ -n "${PID[$n]}" ] && T0[$n]="$(cpu_ticks ${PID[$n]})"; done
+for n in 1 2 3; do [ -n "${PID[$n]}" ] && T0[$n]="$(cl_cpu_ticks $n ${PID[$n]})"; done
 sleep "$CPU_WINDOW"
 for n in 1 2 3; do
   pid="${PID[$n]}"
   if [ -z "$pid" ] || [ -z "${T0[$n]:-}" ]; then echo "  node$n: no sample"; CPU_OK=0; continue; fi
-  t1="$(cpu_ticks "$pid")"
+  t1="$(cl_cpu_ticks $n "$pid")"
   pct="$(awk -v d=$(( t1 - ${T0[$n]} )) -v clk="$CLK" -v w="$CPU_WINDOW" 'BEGIN{printf "%.2f", 100*d/(clk*w)}')"
   printf '  node%s pid=%s  CPU=%s%% over %ss (%d ticks)\n' "$n" "$pid" "$pct" "$CPU_WINDOW" "$(( t1 - ${T0[$n]} ))"
   awk -v p="$pct" -v m="$CPU_MAX" 'BEGIN{exit !(p>m)}' && CPU_MAX="$pct"
@@ -85,10 +61,8 @@ echo "  -> peak idle CPU across nodes: ${CPU_MAX}% (limit ${CPU_LIMIT}%)"
 
 echo
 echo "=== C1. WRITE throughput on the primary (pgbench, single-row INSERT, async) ==="
-PB=/tmp/pgr-perf.sql
-printf '\\set v random(1, 1000000000)\nINSERT INTO perf (id) VALUES (:v);\n' > "$PB"
-PGOUT="$(PGPASSFILE="$HOME/.pgpass" "$B/pgbench" -n -T "$PERF_DUR" -c "$PERF_CLIENTS" -j "$PERF_JOBS" \
-  -f "$PB" -h 127.0.0.1 -p "$P1" -U postgres postgres 2>&1)"
+printf '\\set v random(1, 1000000000)\nINSERT INTO perf (id) VALUES (:v);\n' | cl_put "$P1" /tmp/pgr-perf.sql
+PGOUT="$(cl_pgbench "$P1" -n -T "$PERF_DUR" -c "$PERF_CLIENTS" -j "$PERF_JOBS" -f /tmp/pgr-perf.sql postgres 2>&1)"
 TPS="$(echo "$PGOUT" | awk '/^tps/{print $3; exit}')"
 LAT="$(echo "$PGOUT" | awk '/latency average/{print $4; exit}')"
 echo "  ${PERF_CLIENTS} clients / ${PERF_JOBS} jobs for ${PERF_DUR}s: tps=${TPS:-?}  latency_avg=${LAT:-?} ms"
@@ -98,10 +72,10 @@ TPS_OK=0; awk -v t="${TPS:-0}" 'BEGIN{exit !(t>0)}' && TPS_OK=1
 
 echo
 echo "=== C2. FAILOVER latency (kill -9 primary -> new primary accepts a write) ==="
-KP="$(primary_port)"; KN=$(( KP - P1 + 1 ))
-echo "  killing primary node$KN (port $KP) with -m immediate..."
+KP="$(primary_port)"
+echo "  killing primary node$KP with SIGKILL..."
 T_KILL="$(now_ms)"
-"$B/pg_ctl" -D "$R/n$KN" stop -m immediate >/dev/null 2>&1
+cl_kill "$KP"
 NP=""; T_WRITABLE=""
 for i in $(seq 1 $(( FAILOVER_LIMIT * 10 ))); do
   for p in $P1 $P2 $P3; do

@@ -1,4 +1,4 @@
-name: pg-replica-cluster
+name: pg-replica-test
 
 x-node-env: &node-env
   PGDATA: "/var/lib/postgresql/data"
@@ -11,62 +11,67 @@ x-node-env: &node-env
   APP_USER: "${APP_USER:-weido}"
   APP_PASSWORD: "${APP_PASSWORD:-weido_test_pw}"
   APP_DB: "${APP_DB:-weido}"
-  SYNCHRONOUS: "${SYNCHRONOUS:-on}"
+  PGR_SUPERVISE: "hold"
+  SYNCHRONOUS: "${SYNCHRONOUS:-off}"
+  WAL_KEEP: "${WAL_KEEP:-512MB}"
+  MAX_WAL: "${MAX_WAL:-1GB}"
+  COMPACT_THRESHOLD: "${COMPACT_THRESHOLD:-64}"
+
+x-node-base: &node-base
+  image: pg-replica-paradedb:test
+  build:
+    context: ..
+    dockerfile: docker/Dockerfile
+    args:
+      TEST_TOOLS: "1"
+  cap_add: [NET_ADMIN, SYS_PTRACE]
+  init: true
+  restart: "no"
+  networks: [pgr]
 
 services:
   node1:
-    build:
-      context: ..
-      dockerfile: docker/Dockerfile
-    image: pg-replica-paradedb:local
+    <<: *node-base
     container_name: pgr-node1
-    init: true
     environment:
       <<: *node-env
       NODE_ID: "1"
     volumes: [node1data:/var/lib/postgresql/data]
     ports: ["5432:5432"]
-    networks: [pgr]
-    restart: unless-stopped
 
   node2:
-    image: pg-replica-paradedb:local
+    <<: *node-base
     container_name: pgr-node2
-    init: true
     depends_on: [node1]
     environment:
       <<: *node-env
       NODE_ID: "2"
     volumes: [node2data:/var/lib/postgresql/data]
     ports: ["5433:5432"]
-    networks: [pgr]
-    restart: unless-stopped
 
   node3:
-    image: pg-replica-paradedb:local
+    <<: *node-base
     container_name: pgr-node3
-    init: true
     depends_on: [node1]
     environment:
       <<: *node-env
       NODE_ID: "3"
     volumes: [node3data:/var/lib/postgresql/data]
     ports: ["5434:5432"]
-    networks: [pgr]
-    restart: unless-stopped
 
-  dozzle:
-    image: amir20/dozzle:v10.5.2
-    container_name: pgr-dozzle
+  runner:
+    image: pg-replica-runner:test
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.runner
+    container_name: pgr-runner
     environment:
-      DOZZLE_NO_ANALYTICS: "true"
-      DOZZLE_LEVEL: info
+      SU_PASSWORD: "${SU_PASSWORD:-pgr_super_pw}"
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:ro
-    ports: ["8888:8080"]
+      - ..:/work
+      - /var/run/docker.sock:/var/run/docker.sock
+    working_dir: /work
     networks: [pgr]
-    restart: unless-stopped
-    mem_limit: 128m
 
 volumes:
   node1data:

@@ -7,10 +7,15 @@ LEADER_HOST="$3"
 LEADER_PORT="$4"
 NODE_ID="$5"
 PASSFILE="${6:-}"
+STANDBY_CONNINFO="${7:-}"
 
 [ -n "$PASSFILE" ] && export PGPASSFILE="$PASSFILE"
 PASS_KW=""
 [ -n "$PASSFILE" ] && PASS_KW=" passfile=$PASSFILE"
+
+REJOIN_MARK=/tmp/pg_replica_rejoin_active
+touch "$REJOIN_MARK"
+trap 'rm -f "$REJOIN_MARK"' EXIT
 
 LOG="$(dirname "$DATADIR")/$(basename "$DATADIR").log"
 
@@ -42,8 +47,9 @@ else
   log "pg_basebackup re-clone succeeded"
 fi
 
+CONNINFO="${STANDBY_CONNINFO:-host=$LEADER_HOST port=$LEADER_PORT user=replicator${PASS_KW} application_name=node$NODE_ID}"
 {
-  echo "primary_conninfo = 'host=$LEADER_HOST port=$LEADER_PORT user=replicator${PASS_KW} application_name=node$NODE_ID'"
+  echo "primary_conninfo = '$CONNINFO'"
   echo "default_transaction_read_only = off"
 } >> "$DATADIR/postgresql.auto.conf"
 touch "$DATADIR/standby.signal"
