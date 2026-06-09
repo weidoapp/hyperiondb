@@ -73,7 +73,7 @@ CREATE ROLE replicator WITH REPLICATION LOGIN PASSWORD '<pass>'; // *same* passw
 
 ---
 
-## Performance (highly subjective numbers for 0.1.0)
+## Performance (highly subjective numbers for 0.5.0 using Github CI/CD)
 
 pgbench, 8 clients / 4 jobs, single-row INSERT on the primary, 10 s, async mode
 
@@ -81,21 +81,20 @@ Memory
 
 - 8 MB RSS
 - 2 MB PSS
-- 0.8 MB private
+- 1 MB private
 
 CPU
 
-- 0.38% idle
+- 0.88%
 
 Throughput
 
-- 2494 tps
-- 3.2 ms avg latency
-- 17.6k rows
+- 14,423 tps
+- 0.6 ms avg latency
 
 Failover latency
 
-- 5 s to writable new primary
+- 5-6 s to writable new primary
 
 ## Test
 
