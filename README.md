@@ -81,20 +81,20 @@ Memory
 
 - 8 MB RSS
 - 2 MB PSS
-- 1 MB private
+- <1 MB private
 
 CPU
 
-- 0.88%
+- 0.38%
 
 Throughput
 
-- 14,423 tps
-- 0.6 ms avg latency
+- 14,714 tps
+- 0.54 ms avg latency
 
 Failover latency
 
-- 5-6 s to writable new primary
+- 4-5 s to writable new primary
 
 ## Test
 
