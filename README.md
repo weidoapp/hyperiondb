@@ -85,7 +85,7 @@ Memory
 
 CPU
 
-- 0.38%
+- 0.38% idle
 
 Throughput
 
