@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::path::Path;
 use std::sync::mpsc::Receiver as StdReceiver;
 use std::sync::Arc;
@@ -65,8 +65,10 @@ impl RaftHandle {
             .validate()
             .expect("invalid raft config");
 
+            let voters: Arc<HashSet<u64>> =
+                Arc::new(peers_owned.iter().map(|(id, _)| *id).collect());
             let slot: RaftSlot = Arc::new(OnceCell::new());
-            rpc::spawn_server(listener, slot.clone(), gossip_tx);
+            rpc::spawn_server(listener, slot.clone(), gossip_tx, voters);
             let gossip_out = rpc::spawn_gossip_sender(node_id, peers_owned);
 
             let raft = Raft::new(

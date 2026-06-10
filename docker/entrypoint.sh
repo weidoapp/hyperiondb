@@ -22,15 +22,17 @@ PASSFILE=/var/lib/postgresql/.pgpass
 : "${WAL_KEEP:=512MB}"
 : "${MAX_WAL:=1GB}"
 : "${COMPACT_THRESHOLD:=64}"
-: "${RAFT_DIR:=/tmp}"
+: "${RAFT_DIR:=/var/lib/postgresql/raft}"
 : "${MAX_SLOT_WAL_KEEP:=1GB}"
 
 # Running as root (image default): fix ownership, then drop to the postgres user.
 if [ "$(id -u)" = '0' ]; then
-  mkdir -p "$PGDATA"
-  chown -R postgres:postgres "$(dirname "$PGDATA")" /opt/pg_replica
+  mkdir -p "$PGDATA" "$RAFT_DIR"
+  chown -R postgres:postgres "$(dirname "$PGDATA")" "$RAFT_DIR" /opt/pg_replica
   exec gosu postgres "$0" "$@"
 fi
+
+mkdir -p "$RAFT_DIR"
 
 write_passfile() {
   {
@@ -75,7 +77,7 @@ export PGPASSFILE="$PASSFILE"
 if [ ! -s "$PGDATA/PG_VERSION" ]; then
   if [ "$NODE_ID" = "1" ]; then
     echo "[node1] seeding: initdb (scram) + roles + extensions"
-    printf '%s\n' "$SU_PASSWORD" > /tmp/su.pw
+    (umask 077; printf '%s\n' "$SU_PASSWORD" > /tmp/su.pw)
     "$PGBIN/initdb" -D "$PGDATA" -U postgres -A scram-sha-256 --pwfile=/tmp/su.pw --locale=C.UTF-8 >/dev/null
     rm -f /tmp/su.pw
     {
@@ -85,15 +87,17 @@ if [ ! -s "$PGDATA/PG_VERSION" ]; then
     node_conf
 
     "$PGBIN/pg_ctl" -D "$PGDATA" -o "-c listen_addresses=127.0.0.1" -w start >/dev/null
-    "$PGBIN/psql" -h 127.0.0.1 -U postgres -d postgres -v ON_ERROR_STOP=1 >/dev/null <<SQL
-CREATE ROLE replicator WITH REPLICATION LOGIN PASSWORD '$REPL_PASSWORD';
+    "$PGBIN/psql" -h 127.0.0.1 -U postgres -d postgres -v ON_ERROR_STOP=1 \
+      -v repl_pw="$REPL_PASSWORD" -v app_user="$APP_USER" -v app_pw="$APP_PASSWORD" \
+      -v app_db="$APP_DB" >/dev/null <<'SQL'
+CREATE ROLE replicator WITH REPLICATION LOGIN PASSWORD :'repl_pw';
 GRANT pg_monitor TO replicator;
 GRANT EXECUTE ON FUNCTION pg_catalog.pg_ls_dir(text, boolean, boolean) TO replicator;
 GRANT EXECUTE ON FUNCTION pg_catalog.pg_stat_file(text, boolean) TO replicator;
 GRANT EXECUTE ON FUNCTION pg_catalog.pg_read_binary_file(text) TO replicator;
 GRANT EXECUTE ON FUNCTION pg_catalog.pg_read_binary_file(text, bigint, bigint, boolean) TO replicator;
-CREATE ROLE "$APP_USER" WITH LOGIN PASSWORD '$APP_PASSWORD';
-CREATE DATABASE "$APP_DB" OWNER "$APP_USER";
+CREATE ROLE :"app_user" WITH LOGIN PASSWORD :'app_pw';
+CREATE DATABASE :"app_db" OWNER :"app_user";
 CREATE EXTENSION IF NOT EXISTS pg_replica;
 CREATE TABLE IF NOT EXISTS demo (t text);
 SQL

@@ -15,6 +15,9 @@ printf '*:*:*:replicator:%s\n*:*:*:%s:%s\n' \
   > /var/lib/postgresql/.pgpass
 chown postgres:postgres /var/lib/postgresql/.pgpass
 
+mkdir -p /var/lib/postgresql/raft
+chown postgres:postgres /var/lib/postgresql/raft
+
 if [ "$NODE_ID" = "1" ]; then
   if [ -f "$PGDATA/pg_hba.conf" ] && ! grep -qE 'replication[[:space:]]+replicator' "$PGDATA/pg_hba.conf"; then
     echo "host replication replicator ${SUBNET} scram-sha-256" >> "$PGDATA/pg_hba.conf"

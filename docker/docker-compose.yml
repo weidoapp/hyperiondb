@@ -24,7 +24,7 @@ services:
     environment:
       <<: *node-env
       NODE_ID: "1"
-    volumes: [node1data:/var/lib/postgresql/data]
+    volumes: [node1data:/var/lib/postgresql/data, node1raft:/var/lib/postgresql/raft]
     ports: ["5432:5432"]
     networks: [pgr]
     restart: unless-stopped
@@ -37,7 +37,7 @@ services:
     environment:
       <<: *node-env
       NODE_ID: "2"
-    volumes: [node2data:/var/lib/postgresql/data]
+    volumes: [node2data:/var/lib/postgresql/data, node2raft:/var/lib/postgresql/raft]
     ports: ["5433:5432"]
     networks: [pgr]
     restart: unless-stopped
@@ -50,7 +50,7 @@ services:
     environment:
       <<: *node-env
       NODE_ID: "3"
-    volumes: [node3data:/var/lib/postgresql/data]
+    volumes: [node3data:/var/lib/postgresql/data, node3raft:/var/lib/postgresql/raft]
     ports: ["5434:5432"]
     networks: [pgr]
     restart: unless-stopped
@@ -72,6 +72,9 @@ volumes:
   node1data:
   node2data:
   node3data:
+  node1raft:
+  node2raft:
+  node3raft:
 
 networks:
   pgr:

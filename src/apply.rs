@@ -1,5 +1,33 @@
-use std::process::{Command, Stdio};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::process::{Command, Output, Stdio};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+const SQL_TIMEOUT: Duration = Duration::from_secs(10);
+const PROBE_TIMEOUT: Duration = Duration::from_millis(1200);
+
+fn output_with_timeout(mut command: Command, timeout: Duration) -> Option<Output> {
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = command.spawn().ok()?;
+    let deadline = Instant::now() + timeout;
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => return child.wait_with_output().ok(),
+            Ok(None) if Instant::now() >= deadline => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+            Ok(None) => std::thread::sleep(Duration::from_millis(20)),
+            Err(_) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+        }
+    }
+}
 
 pub fn split_host_port(addr: &str) -> (String, String) {
     match addr.rsplit_once(':') {
@@ -60,6 +88,7 @@ pub fn spawn_watchdog(
     port: &str,
     heartbeat: &str,
     node_id: u64,
+    user: &str,
 ) -> bool {
     Command::new("setsid")
         .arg("bash")
@@ -69,6 +98,7 @@ pub fn spawn_watchdog(
         .arg(port)
         .arg(heartbeat)
         .arg(node_id.to_string())
+        .arg(user)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -77,7 +107,8 @@ pub fn spawn_watchdog(
 }
 
 pub fn peer_wal_lsn(psql: &str, host: &str, port: &str) -> Option<u64> {
-    let output = Command::new(psql)
+    let mut command = Command::new(psql);
+    command
         .args([
             "-h", host,
             "-p", port,
@@ -87,9 +118,8 @@ pub fn peer_wal_lsn(psql: &str, host: &str, port: &str) -> Option<u64> {
             "-tAc",
             "SELECT pg_wal_lsn_diff(COALESCE(pg_last_wal_receive_lsn(), '0/0'), '0/0')::bigint",
         ])
-        .env("PGCONNECT_TIMEOUT", "1")
-        .output()
-        .ok()?;
+        .env("PGCONNECT_TIMEOUT", "1");
+    let output = output_with_timeout(command, PROBE_TIMEOUT)?;
     if output.status.success() {
         String::from_utf8_lossy(&output.stdout)
             .trim()
@@ -107,7 +137,7 @@ pub fn wal_lsn(psql: &str, host: &str, port: &str, in_recovery: bool) -> u64 {
     } else {
         "SELECT pg_wal_lsn_diff(pg_current_wal_lsn(), '0/0')::bigint"
     };
-    run_sql(psql, host, port, sql)
+    run_sql_with_timeout(psql, host, port, sql, PROBE_TIMEOUT)
         .ok()
         .and_then(|value| value.trim().parse::<i64>().ok())
         .map(|value| value.max(0) as u64)
@@ -115,6 +145,16 @@ pub fn wal_lsn(psql: &str, host: &str, port: &str, in_recovery: bool) -> u64 {
 }
 
 pub fn run_sql(psql: &str, host: &str, port: &str, sql: &str) -> Result<String, String> {
+    run_sql_with_timeout(psql, host, port, sql, SQL_TIMEOUT)
+}
+
+fn run_sql_with_timeout(
+    psql: &str,
+    host: &str,
+    port: &str,
+    sql: &str,
+    timeout: Duration,
+) -> Result<String, String> {
     let user = crate::config::apply_user();
     let db = crate::config::apply_db();
     let passfile = crate::config::passfile();
@@ -128,12 +168,13 @@ pub fn run_sql(psql: &str, host: &str, port: &str, sql: &str) -> Result<String, 
         "-v", "ON_ERROR_STOP=1",
         "-tAc", sql,
     ]);
+    command.env("PGCONNECT_TIMEOUT", "2");
+    command.env("PGOPTIONS", "-c statement_timeout=5000");
     if !passfile.is_empty() {
         command.env("PGPASSFILE", &passfile);
     }
-    let output = command
-        .output()
-        .map_err(|error| format!("spawn failed: {}", error))?;
+    let output = output_with_timeout(command, timeout)
+        .ok_or_else(|| String::from("psql failed to spawn or timed out"))?;
 
     if output.status.success() {
         Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())

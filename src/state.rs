@@ -2,7 +2,7 @@ use std::fs;
 use std::io::Write;
 
 fn path(node_id: u64) -> String {
-    format!("/tmp/pg_replica_{}.state", node_id)
+    format!("{}/pg_replica_{}.state", crate::config::raft_dir(), node_id)
 }
 
 pub fn write(node_id: u64, line: &str) {

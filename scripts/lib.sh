@@ -4,6 +4,7 @@ set -uo pipefail
 CL_NODES="${CL_NODES:-1 2 3}"
 CL_PASSFILE="${CL_PASSFILE:-/var/lib/postgresql/.pgpass}"
 CL_RAFT_PORT="${CL_RAFT_PORT:-7400}"
+CL_RAFT_DIR="${CL_RAFT_DIR:-/var/lib/postgresql/raft}"
 CL_FAKETIME_LIB="${CL_FAKETIME_LIB:-}"
 SU_PASSWORD="${SU_PASSWORD:-pgr_super_pw}"
 
@@ -51,10 +52,10 @@ cl_unpause() { docker unpause "$(cname "$1")" >/dev/null 2>&1 || true; }
 cl_logs() { docker logs "$(cname "$1")" 2>&1; }
 
 cl_node_logfile() { _rootexec "$1" sh -c 'cat /var/lib/postgresql/data.log 2>/dev/null'; }
-cl_watchdog_log() { _rootexec "$1" sh -c "cat /tmp/pg_replica_wd_$1.log 2>/dev/null"; }
+cl_watchdog_log() { _rootexec "$1" sh -c "cat $CL_RAFT_DIR/pg_replica_wd_$1.log 2>/dev/null"; }
 
 cl_hb_age() {
-  _rootexec "$1" sh -c 'now=$(date +%s%3N); hb=$(cat /tmp/pg_replica_hb_'"$1"' 2>/dev/null || echo 0); echo $(( now - hb ))'
+  _rootexec "$1" sh -c 'now=$(date +%s%3N); hb=$(cat '"$CL_RAFT_DIR"'/pg_replica_hb_'"$1"' 2>/dev/null || echo 0); echo $(( now - hb ))'
 }
 
 cl_postmaster_pid() { _rootexec "$1" sh -c 'head -1 "$PGDATA/postmaster.pid" 2>/dev/null'; }
@@ -83,8 +84,8 @@ cl_clock_skew_off() { _rootexec "$1" sh -c 'rm -f /tmp/faketime'; docker restart
 cl_slow_disk_on()  { docker update --device-write-bps /dev/sda:1mb --device-read-bps /dev/sda:1mb "$(cname "$1")" >/dev/null 2>&1; }
 cl_slow_disk_off() { docker update --device-write-bps /dev/sda:0 --device-read-bps /dev/sda:0 "$(cname "$1")" >/dev/null 2>&1 || true; }
 
-cl_raft_file_size() { _rootexec "$1" sh -c "stat -c %s /tmp/raft_log_$1.json 2>/dev/null || echo 0"; }
-cl_raft_log_len()   { _rootexec "$1" sh -c "jq '.log | length' /tmp/raft_log_$1.json 2>/dev/null || echo -1"; }
+cl_raft_file_size() { _rootexec "$1" sh -c "stat -c %s $CL_RAFT_DIR/raft_log_$1.json 2>/dev/null || echo 0"; }
+cl_raft_log_len()   { _rootexec "$1" sh -c "jq '.log | length' $CL_RAFT_DIR/raft_log_$1.json 2>/dev/null || echo -1"; }
 
 cl_clk_tck()   { _rootexec "$1" getconf CLK_TCK 2>/dev/null; }
 cl_rss_kb()    { _rootexec "$1" sh -c "ps -o rss= -p $2 2>/dev/null | tr -d ' '"; }

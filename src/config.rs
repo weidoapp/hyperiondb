@@ -1,5 +1,10 @@
 use pgrx::guc::{GucContext, GucFlags, GucRegistry, GucSetting};
 use std::ffi::CString;
+use std::sync::OnceLock;
+
+static APPLY_USER_CACHE: OnceLock<String> = OnceLock::new();
+static APPLY_DB_CACHE: OnceLock<String> = OnceLock::new();
+static PASSFILE_CACHE: OnceLock<String> = OnceLock::new();
 
 pub static SYNCHRONOUS: GucSetting<bool> = GucSetting::<bool>::new(false);
 pub static NODE_ID: GucSetting<i32> = GucSetting::<i32>::new(0);
@@ -97,7 +102,7 @@ pub fn init() {
     GucRegistry::define_string_guc(
         c"pg_replica.watchdog_script",
         c"Path to a detached deadman watchdog that fences this node read-only if the control plane stalls.",
-        c"Receives: psql host port heartbeat_file node_id. Empty disables the watchdog.",
+        c"Receives: psql host port heartbeat_file node_id apply_user. Empty disables the watchdog.",
         &WATCHDOG_SCRIPT,
         GucContext::Postmaster,
         GucFlags::default(),
@@ -114,8 +119,8 @@ pub fn init() {
 
     GucRegistry::define_string_guc(
         c"pg_replica.raft_dir",
-        c"Directory holding this node's durable Raft state (term/vote/log).",
-        c"Must be node-local and outside the Postgres data directory so base backups and pg_rewind never clone it. Empty defaults to /tmp.",
+        c"Directory holding this node's durable Raft state (term/vote/log). Required.",
+        c"Must be node-local, on durable storage that survives reboots (never /tmp), and outside the Postgres data directory so base backups and pg_rewind never clone it. The supervisor refuses to start while unset.",
         &RAFT_DIR,
         GucContext::Postmaster,
         GucFlags::default(),
@@ -193,36 +198,47 @@ pub fn watchdog_script() -> String {
 }
 
 pub fn passfile() -> String {
-    PASSFILE
-        .get()
-        .map(|value| value.to_string_lossy().into_owned())
-        .unwrap_or_default()
+    PASSFILE_CACHE
+        .get_or_init(|| {
+            PASSFILE
+                .get()
+                .map(|value| value.to_string_lossy().into_owned())
+                .unwrap_or_default()
+        })
+        .clone()
 }
 
 pub fn raft_dir() -> String {
     RAFT_DIR
         .get()
         .map(|value| value.to_string_lossy().into_owned())
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| String::from("/tmp"))
+        .unwrap_or_default()
 }
 
 pub fn apply_user() -> String {
-    APPLY_USER
-        .get()
-        .map(|value| value.to_string_lossy().into_owned())
-        .filter(|value| !value.is_empty())
-        .or_else(|| std::env::var("POSTGRES_USER").ok())
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| String::from("postgres"))
+    APPLY_USER_CACHE
+        .get_or_init(|| {
+            APPLY_USER
+                .get()
+                .map(|value| value.to_string_lossy().into_owned())
+                .filter(|value| !value.is_empty())
+                .or_else(|| std::env::var("POSTGRES_USER").ok())
+                .filter(|value| !value.is_empty())
+                .unwrap_or_else(|| String::from("postgres"))
+        })
+        .clone()
 }
 
 pub fn apply_db() -> String {
-    APPLY_DB
-        .get()
-        .map(|value| value.to_string_lossy().into_owned())
-        .filter(|value| !value.is_empty())
-        .or_else(|| std::env::var("POSTGRES_DB").ok())
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| String::from("postgres"))
+    APPLY_DB_CACHE
+        .get_or_init(|| {
+            APPLY_DB
+                .get()
+                .map(|value| value.to_string_lossy().into_owned())
+                .filter(|value| !value.is_empty())
+                .or_else(|| std::env::var("POSTGRES_DB").ok())
+                .filter(|value| !value.is_empty())
+                .unwrap_or_else(|| String::from("postgres"))
+        })
+        .clone()
 }

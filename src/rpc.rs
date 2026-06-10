@@ -1,5 +1,7 @@
+use std::collections::HashSet;
 use std::sync::mpsc::Sender as StdSender;
 use std::sync::Arc;
+use std::time::Duration;
 
 use openraft::error::{
     InstallSnapshotError, NetworkError, RPCError, RaftError, RemoteError, Unreachable,
@@ -16,6 +18,7 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::mpsc::{unbounded_channel, UnboundedSender};
 use tokio::sync::OnceCell;
+use tokio::time::{timeout, timeout_at, Instant};
 
 use crate::rtype::{NodeId, TypeConfig};
 
@@ -46,7 +49,9 @@ pub const KIND_GOSSIP: u8 = 1;
 const RPC_APPEND: u8 = 0;
 const RPC_VOTE: u8 = 1;
 const RPC_SNAPSHOT: u8 = 2;
-const MAX_FRAME: usize = 256 * 1024 * 1024;
+const MAX_FRAME: usize = 4 * 1024 * 1024;
+const CONNECT_TIMEOUT: Duration = Duration::from_millis(1000);
+const GOSSIP_SEND_TIMEOUT: Duration = Duration::from_millis(1000);
 
 pub type RaftSlot = Arc<OnceCell<Raft<TypeConfig>>>;
 type RpcError<E = RaftError<NodeId>> = RPCError<NodeId, BasicNode, E>;
@@ -73,6 +78,7 @@ pub fn spawn_server(
     listener: std::net::TcpListener,
     slot: RaftSlot,
     gossip_in: StdSender<(u64, Vec<u8>)>,
+    voters: Arc<HashSet<u64>>,
 ) {
     tokio::spawn(async move {
         let listener = match TcpListener::from_std(listener) {
@@ -84,7 +90,8 @@ pub fn spawn_server(
                 Ok((stream, _)) => {
                     let slot = slot.clone();
                     let gossip_in = gossip_in.clone();
-                    tokio::spawn(handle_conn(stream, slot, gossip_in));
+                    let voters = voters.clone();
+                    tokio::spawn(handle_conn(stream, slot, gossip_in, voters));
                 }
                 Err(_) => tokio::time::sleep(std::time::Duration::from_millis(100)).await,
             }
@@ -92,7 +99,12 @@ pub fn spawn_server(
     });
 }
 
-async fn handle_conn(mut stream: TcpStream, slot: RaftSlot, gossip_in: StdSender<(u64, Vec<u8>)>) {
+async fn handle_conn(
+    mut stream: TcpStream,
+    slot: RaftSlot,
+    gossip_in: StdSender<(u64, Vec<u8>)>,
+    voters: Arc<HashSet<u64>>,
+) {
     loop {
         let frame = match read_frame(&mut stream).await {
             Ok(frame) => frame,
@@ -105,7 +117,9 @@ async fn handle_conn(mut stream: TcpStream, slot: RaftSlot, gossip_in: StdSender
             KIND_GOSSIP => {
                 if frame.len() >= 9 {
                     let from = u64::from_be_bytes(frame[1..9].try_into().unwrap());
-                    let _ = gossip_in.send((from, frame[9..].to_vec()));
+                    if voters.contains(&from) {
+                        let _ = gossip_in.send((from, frame[9..].to_vec()));
+                    }
                 }
             }
             KIND_RAFT => match dispatch_raft(&frame[1..], &slot).await {
@@ -157,6 +171,7 @@ impl RaftNetworkFactory<TypeConfig> for NetworkFactory {
         Connection {
             target,
             addr: node.addr.clone(),
+            stream: None,
         }
     }
 }
@@ -164,10 +179,31 @@ impl RaftNetworkFactory<TypeConfig> for NetworkFactory {
 pub struct Connection {
     target: NodeId,
     addr: String,
+    stream: Option<TcpStream>,
 }
 
 impl Connection {
-    async fn call<Req, Resp, Err>(&self, rpc: u8, req: &Req) -> Result<Resp, RpcError<Err>>
+    async fn exchange(stream: &mut TcpStream, payload: &[u8]) -> std::io::Result<Vec<u8>> {
+        write_frame(stream, payload).await?;
+        read_frame(stream).await
+    }
+
+    fn decode<Resp, Err>(target: NodeId, resp: &[u8]) -> Result<Resp, RpcError<Err>>
+    where
+        Resp: DeserializeOwned,
+        Err: std::error::Error + DeserializeOwned,
+    {
+        let res: Result<Resp, Err> =
+            serde_json::from_slice(resp).map_err(|e| RPCError::Network(NetworkError::new(&e)))?;
+        res.map_err(|e| RPCError::RemoteError(RemoteError::new(target, e)))
+    }
+
+    async fn call<Req, Resp, Err>(
+        &mut self,
+        rpc: u8,
+        req: &Req,
+        ttl: Duration,
+    ) -> Result<Resp, RpcError<Err>>
     where
         Req: Serialize,
         Resp: DeserializeOwned,
@@ -180,19 +216,26 @@ impl Connection {
             &serde_json::to_vec(req).map_err(|e| RPCError::Network(NetworkError::new(&e)))?,
         );
 
-        let mut stream = TcpStream::connect(&self.addr)
-            .await
-            .map_err(|e| RPCError::Unreachable(Unreachable::new(&e)))?;
-        write_frame(&mut stream, &payload)
-            .await
-            .map_err(|e| RPCError::Network(NetworkError::new(&e)))?;
-        let resp = read_frame(&mut stream)
-            .await
-            .map_err(|e| RPCError::Network(NetworkError::new(&e)))?;
+        let deadline = Instant::now() + ttl;
 
-        let res: Result<Resp, Err> =
-            serde_json::from_slice(&resp).map_err(|e| RPCError::Network(NetworkError::new(&e)))?;
-        res.map_err(|e| RPCError::RemoteError(RemoteError::new(self.target, e)))
+        if let Some(mut stream) = self.stream.take() {
+            if let Ok(Ok(resp)) = timeout_at(deadline, Self::exchange(&mut stream, &payload)).await
+            {
+                self.stream = Some(stream);
+                return Self::decode(self.target, &resp);
+            }
+        }
+
+        let mut stream = timeout_at(deadline, TcpStream::connect(&self.addr))
+            .await
+            .map_err(|e| RPCError::Unreachable(Unreachable::new(&e)))?
+            .map_err(|e| RPCError::Unreachable(Unreachable::new(&e)))?;
+        let resp = timeout_at(deadline, Self::exchange(&mut stream, &payload))
+            .await
+            .map_err(|e| RPCError::Network(NetworkError::new(&e)))?
+            .map_err(|e| RPCError::Network(NetworkError::new(&e)))?;
+        self.stream = Some(stream);
+        Self::decode(self.target, &resp)
     }
 }
 
@@ -200,31 +243,31 @@ impl RaftNetwork<TypeConfig> for Connection {
     async fn append_entries(
         &mut self,
         req: AppendEntriesRequest<TypeConfig>,
-        _option: RPCOption,
+        option: RPCOption,
     ) -> Result<AppendEntriesResponse<NodeId>, RpcError> {
-        self.call(RPC_APPEND, &req).await
+        self.call(RPC_APPEND, &req, option.hard_ttl()).await
     }
 
     async fn install_snapshot(
         &mut self,
         req: InstallSnapshotRequest<TypeConfig>,
-        _option: RPCOption,
+        option: RPCOption,
     ) -> Result<InstallSnapshotResponse<NodeId>, RpcError<RaftError<NodeId, InstallSnapshotError>>> {
-        self.call(RPC_SNAPSHOT, &req).await
+        self.call(RPC_SNAPSHOT, &req, option.hard_ttl()).await
     }
 
     async fn vote(
         &mut self,
         req: VoteRequest<NodeId>,
-        _option: RPCOption,
+        option: RPCOption,
     ) -> Result<VoteResponse<NodeId>, RpcError> {
-        self.call(RPC_VOTE, &req).await
+        self.call(RPC_VOTE, &req, option.hard_ttl()).await
     }
 }
 
 #[derive(Clone)]
 pub struct GossipHandle {
-    tx: UnboundedSender<Vec<u8>>,
+    txs: Vec<UnboundedSender<Vec<u8>>>,
 }
 
 impl GossipHandle {
@@ -233,23 +276,40 @@ impl GossipHandle {
         frame.push(KIND_GOSSIP);
         frame.extend_from_slice(&from.to_be_bytes());
         frame.extend_from_slice(payload);
-        let _ = self.tx.send(frame);
+        for tx in &self.txs {
+            let _ = tx.send(frame.clone());
+        }
     }
 }
 
 pub fn spawn_gossip_sender(my_id: u64, peers: Vec<(u64, String)>) -> GossipHandle {
-    let (tx, mut rx) = unbounded_channel::<Vec<u8>>();
-    tokio::spawn(async move {
-        while let Some(frame) = rx.recv().await {
-            for (id, addr) in &peers {
-                if *id == my_id {
-                    continue;
+    let mut txs = Vec::new();
+    for (id, addr) in peers {
+        if id == my_id {
+            continue;
+        }
+        let (tx, mut rx) = unbounded_channel::<Vec<u8>>();
+        txs.push(tx);
+        tokio::spawn(async move {
+            let mut conn: Option<TcpStream> = None;
+            while let Some(mut frame) = rx.recv().await {
+                while let Ok(newer) = rx.try_recv() {
+                    frame = newer;
                 }
-                if let Ok(mut stream) = TcpStream::connect(addr).await {
-                    let _ = write_frame(&mut stream, &frame).await;
+                if conn.is_none() {
+                    conn = match timeout(CONNECT_TIMEOUT, TcpStream::connect(&addr)).await {
+                        Ok(Ok(stream)) => Some(stream),
+                        _ => None,
+                    };
+                }
+                if let Some(stream) = conn.as_mut() {
+                    match timeout(GOSSIP_SEND_TIMEOUT, write_frame(stream, &frame)).await {
+                        Ok(Ok(())) => {}
+                        _ => conn = None,
+                    }
                 }
             }
-        }
-    });
-    GossipHandle { tx }
+        });
+    }
+    GossipHandle { txs }
 }

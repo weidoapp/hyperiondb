@@ -2,13 +2,15 @@ pub struct Gossip {
     pub lsn: u64,
     pub in_recovery: bool,
     pub reconfirm: bool,
+    pub seq: u64,
 }
 
-pub fn encode_gossip(lsn: u64, in_recovery: bool, reconfirm: bool) -> Vec<u8> {
-    let mut buf = Vec::with_capacity(10);
+pub fn encode_gossip(lsn: u64, in_recovery: bool, reconfirm: bool, seq: u64) -> Vec<u8> {
+    let mut buf = Vec::with_capacity(18);
     buf.extend_from_slice(&lsn.to_be_bytes());
     buf.push(in_recovery as u8);
     buf.push(reconfirm as u8);
+    buf.extend_from_slice(&seq.to_be_bytes());
     buf
 }
 
@@ -18,10 +20,14 @@ pub fn decode_gossip(bytes: &[u8]) -> Option<Gossip> {
     }
     let mut lsn = [0u8; 8];
     lsn.copy_from_slice(&bytes[..8]);
+    let seq = bytes
+        .get(10..18)
+        .map_or(0, |raw| u64::from_be_bytes(raw.try_into().unwrap()));
     Some(Gossip {
         lsn: u64::from_be_bytes(lsn),
         in_recovery: bytes[8] != 0,
         reconfirm: bytes.get(9).map_or(false, |byte| *byte != 0),
+        seq,
     })
 }
 
