@@ -1,0 +1,58 @@
+name: pgxn
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  release:
+    if: contains(github.event.head_commit.message, '[cd]') || github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/')
+    name: bundle + release to PGXN
+    runs-on: ubuntu-24.04
+    container: pgxn/pgxn-tools
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - name: trust workspace
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - name: read distribution metadata
+        id: meta
+        run: |
+          v="$(grep -m1 '"version"' META.json | sed -E 's/.*"version"[^"]*"([^"]+)".*/\1/')"
+          d="$(grep -m1 '"name"' META.json | sed -E 's/.*"name"[^"]*"([^"]+)".*/\1/')"
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "dist=$d" >> "$GITHUB_OUTPUT"
+      - name: verify tag matches META.json version
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          test "$tag" = "${{ steps.meta.outputs.version }}" || { echo "git tag ($tag) != META.json version (${{ steps.meta.outputs.version }})" >&2; exit 1; }
+      - name: skip if this version is already on PGXN
+        id: gate
+        run: |
+          v="${{ steps.meta.outputs.version }}"
+          d="${{ steps.meta.outputs.dist }}"
+          esc="${v//./\\.}"
+          if curl -fsS "https://api.pgxn.org/dist/${d}.json" -o /tmp/dist.json 2>/dev/null \
+             && grep -Eq "\"version\"[[:space:]]*:[[:space:]]*\"${esc}\"" /tmp/dist.json; then
+            echo "${d} ${v} already published on PGXN; nothing to release"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "${d} ${v} not yet on PGXN; releasing"
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: validate + bundle
+        if: steps.gate.outputs.skip != 'true'
+        run: pgxn-bundle
+      - name: release on PGXN
+        if: steps.gate.outputs.skip != 'true'
+        env:
+          PGXN_USERNAME: ${{ secrets.PGXN_USERNAME }}
+          PGXN_PASSWORD: ${{ secrets.PGXN_PASSWORD }}
+        run: pgxn-release
